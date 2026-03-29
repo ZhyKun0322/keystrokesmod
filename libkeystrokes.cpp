@@ -17,7 +17,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
-#define VERSION "1.0.3"
+#define VERSION "1.0.4"
 
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
@@ -106,7 +106,6 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
     return result;
 }
 
-// ─── GL State Save/Restore ───────────────────────────────────────────────────
 struct glstate {
     GLint prog, tex, atex, abuf, ebuf, vao, fbo, vp[4], sc[4], bsrc, bdst;
     GLboolean blend, cull, depth, scissor;
@@ -148,33 +147,32 @@ static void drawkey(const char* label, bool pressed, ImVec2 size) {
 }
 
 static void drawsettings(ImVec2 hudpos) {
-    float confW = 450.0f; 
-    float confH = 320.0f; // Fixed height, will scroll inside
+    float confW = 480.0f; 
+    float confH = 350.0f; 
 
     ImGui::SetNextWindowPos(hudpos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(confW, confH), ImGuiCond_Always);
     
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.1f, 0.1f, 0.1f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.09f, 0.09f, 0.98f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
 
     ImGui::Begin("##config", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
 
-    // ─── SCROLLABLE AREA START ───
-    // This allows the user to swipe up/down to see everything if the window is too small
+    // Scrollable child area
     ImGui::BeginChild("##scroll_settings", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
-    ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.7f, 1.0f), "SETTINGS");
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "HUD SETTINGS");
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 10));
 
-    // 1. SIZE / DPI
-    ImGui::Text("Button Size: %.0f px", g_keysize);
+    // 1. Size / DPI
+    ImGui::Text("Size: %.0f px", g_keysize);
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##size", &g_keysize, 30.0f, 180.0f, "")) savecfg();
+    if (ImGui::SliderFloat("##size", &g_keysize, 30.0f, 200.0f, "")) savecfg();
     ImGui::Dummy(ImVec2(0, 15));
 
-    // 2. OPACITY
+    // 2. Opacity
     float op = g_opacity * 100.0f;
     ImGui::Text("Opacity: %.0f%%", op);
     ImGui::SetNextItemWidth(-1);
@@ -184,18 +182,15 @@ static void drawsettings(ImVec2 hudpos) {
     }
     ImGui::Dummy(ImVec2(0, 15));
 
-    // 3. LOCK
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-    if (ImGui::Checkbox("Lock HUD Position", &g_locked)) savecfg();
-    ImGui::PopStyleVar();
-
-    ImGui::Dummy(ImVec2(0, 40)); // Extra space at bottom for easy scrolling
+    // 3. Lock
+    if (ImGui::Checkbox("Lock Position", &g_locked)) savecfg();
     
+    ImGui::Dummy(ImVec2(0, 50)); 
     ImGui::EndChild();
-    // ─── SCROLLABLE AREA END ───
 
-    // Tap outside to close logic
-    if (ImGui::IsMouseClicked(0) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
+    // FIXED CLOSE LOGIC:
+    // Close ONLY if the user clicks and is NOT touching the window or its contents.
+    if (ImGui::IsMouseClicked(0) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)) {
         g_showsettings = false;
     }
 
@@ -217,7 +212,7 @@ static void drawmenu() {
     bool isInside = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hudW &&
                      io.MousePos.y >= g_hudpos.y && io.MousePos.y <= g_hudpos.y + hudH);
 
-    // Swap Logic: Long Press to Open
+    // Long press logic
     if (isInside && io.MouseDown[0] && !g_pressing && !g_showsettings) {
         g_pressing = true;
         g_pressstart = nowsec();
@@ -229,7 +224,7 @@ static void drawmenu() {
         g_pressing = false;
     }
 
-    // Move Logic (Invisible Interaction Box)
+    // Move logic
     if (!g_locked && !g_showsettings && isInside && ImGui::IsMouseDragging(0)) {
         g_hudpos.x += io.MouseDelta.x;
         g_hudpos.y += io.MouseDelta.y;
@@ -262,7 +257,7 @@ static void drawmenu() {
     }
 }
 
-// ─── Boilerplate Implementation ───
+// ─── Setup & Hooks (Omitted for length, keep your existing ones) ───
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     loadcfg();
