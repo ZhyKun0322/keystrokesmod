@@ -17,7 +17,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
-#define VERSION "1.0.2"
+#define VERSION "1.0.3"
 
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
@@ -39,7 +39,7 @@ static EGLContext g_targetcontext = EGL_NO_CONTEXT;
 static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 
 // ─── Settings ────────────────────────────────────────────────────────────────
-static float g_keysize      = 80.0f; // Defaulted larger
+static float g_keysize      = 70.0f;
 static float g_opacity      = 1.0f;
 static bool  g_locked       = false;
 static bool  g_showsettings = false;
@@ -106,7 +106,7 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
     return result;
 }
 
-// GL State Save/Restore Omitted for Brevity (Same as your original)
+// ─── GL State Save/Restore ───────────────────────────────────────────────────
 struct glstate {
     GLint prog, tex, atex, abuf, ebuf, vao, fbo, vp[4], sc[4], bsrc, bdst;
     GLboolean blend, cull, depth, scissor;
@@ -147,55 +147,55 @@ static void drawkey(const char* label, bool pressed, ImVec2 size) {
     ImGui::PopStyleColor(4);
 }
 
-static void drawsettings(ImVec2 hudpos, float w, float h) {
-    // Making the config window much larger and centered on the HUD position
-    float confW = 550.0f; 
-    float confH = 380.0f;
+static void drawsettings(ImVec2 hudpos) {
+    float confW = 450.0f; 
+    float confH = 320.0f; // Fixed height, will scroll inside
 
     ImGui::SetNextWindowPos(hudpos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(confW, confH), ImGuiCond_Always);
     
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.07f, 0.07f, 0.98f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 15.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 15)); // Thick sliders
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.1f, 0.1f, 0.1f, 0.98f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
 
-    ImGui::Begin("##config", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar);
+    ImGui::Begin("##config", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
 
-    ImGui::TextColored(ImVec4(0.3f, 0.8f, 0.6f, 1.0f), "HUD CONFIGURATION");
+    // ─── SCROLLABLE AREA START ───
+    // This allows the user to swipe up/down to see everything if the window is too small
+    ImGui::BeginChild("##scroll_settings", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
+    ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.7f, 1.0f), "SETTINGS");
     ImGui::Separator();
-    ImGui::Dummy(ImVec2(0, 15));
+    ImGui::Dummy(ImVec2(0, 10));
 
     // 1. SIZE / DPI
     ImGui::Text("Button Size: %.0f px", g_keysize);
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##size", &g_keysize, 40.0f, 200.0f, "")) savecfg();
+    if (ImGui::SliderFloat("##size", &g_keysize, 30.0f, 180.0f, "")) savecfg();
     ImGui::Dummy(ImVec2(0, 15));
 
     // 2. OPACITY
     float op = g_opacity * 100.0f;
     ImGui::Text("Opacity: %.0f%%", op);
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##opacity", &op, 5.0f, 100.0f, "")) {
+    if (ImGui::SliderFloat("##opacity", &op, 10.0f, 100.0f, "")) {
         g_opacity = op / 100.0f;
         savecfg();
     }
     ImGui::Dummy(ImVec2(0, 15));
 
     // 3. LOCK
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f);
-    if (ImGui::Checkbox("Lock Position", &g_locked)) savecfg();
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+    if (ImGui::Checkbox("Lock HUD Position", &g_locked)) savecfg();
     ImGui::PopStyleVar();
 
-    ImGui::Dummy(ImVec2(0, 30));
+    ImGui::Dummy(ImVec2(0, 40)); // Extra space at bottom for easy scrolling
     
-    // Back Button (Optional, since tapping outside works too)
-    if (ImGui::Button("SAVE & CLOSE", ImVec2(-1, 60))) {
-        g_showsettings = false;
-        savecfg();
-    }
+    ImGui::EndChild();
+    // ─── SCROLLABLE AREA END ───
 
-    // Tap anywhere else to close logic
-    if (ImGui::IsMouseClicked(0) && !ImGui::IsWindowHovered()) {
+    // Tap outside to close logic
+    if (ImGui::IsMouseClicked(0) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
         g_showsettings = false;
     }
 
@@ -229,7 +229,7 @@ static void drawmenu() {
         g_pressing = false;
     }
 
-    // Move Logic (Invisible Box)
+    // Move Logic (Invisible Interaction Box)
     if (!g_locked && !g_showsettings && isInside && ImGui::IsMouseDragging(0)) {
         g_hudpos.x += io.MouseDelta.x;
         g_hudpos.y += io.MouseDelta.y;
@@ -237,7 +237,7 @@ static void drawmenu() {
     }
 
     if (g_showsettings) {
-        drawsettings(g_hudpos, hudW, hudH);
+        drawsettings(g_hudpos);
     } else {
         ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
         ImGui::Begin("Keystrokes", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground | 
@@ -262,7 +262,7 @@ static void drawmenu() {
     }
 }
 
-// ─── Boilerplate (Setup, Render, Hooks) Same as previous version ──────────────
+// ─── Boilerplate Implementation ───
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     loadcfg();
