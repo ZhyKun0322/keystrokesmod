@@ -22,7 +22,6 @@ struct KeyState {
 
 static KeyState g_keys;
 static std::mutex g_keymutex;
-static bool g_edit_mode = false; // Toggle this to move the window
 
 #define AKEYCODE_W     51
 #define AKEYCODE_A     29
@@ -38,14 +37,14 @@ static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
 static int32_t (*orig_consume)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
 
-// --- Fixed Hook: Passes touches to ImGui ---
+// --- Input Hook ---
 static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent) {
     int32_t result = orig_consume ? orig_consume(thiz, a1, a2, a3, a4, outEvent) : 0;
     
     if (result == 0 && outEvent && *outEvent) {
         AInputEvent* event = *outEvent;
         
-        // CRITICAL: This allows ImGui to see your finger for dragging
+        // Tells ImGui where your touch is
         if (g_initialized) {
             ImGui_ImplAndroid_HandleInputEvent(event);
         }
@@ -133,25 +132,23 @@ static void drawmenu() {
         k = g_keys;
     }
 
-    // 1. Separate "Edit" control window
-    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-    if (ImGui::Button(g_edit_mode ? "Lock Position" : "Unlock to Move")) {
-        g_edit_mode = !g_edit_mode;
-    }
-    ImGui::End();
-
-    // 2. Keystrokes Window
     ImGui::SetNextWindowPos(ImVec2(100, 100), ImGuiCond_FirstUseEver);
     
-    ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar;
-    
-    if (!g_edit_mode) {
-        // Transparent and un-interactable when locked
-        flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs;
-    }
+    // Transparent, no title, no background.
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | 
+                            ImGuiWindowFlags_NoBackground | 
+                            ImGuiWindowFlags_AlwaysAutoResize | 
+                            ImGuiWindowFlags_NoScrollbar;
 
     ImGui::Begin("Keystrokes HUD", nullptr, flags);
+
+    // --- INTERNAL DRAG LOGIC ---
+    // If you touch the window area and move your finger, the window follows.
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        ImVec2 delta = ImGui::GetIO().MouseDelta;
+        ImVec2 pos = ImGui::GetWindowPos();
+        ImGui::SetWindowPos(ImVec2(pos.x + delta.x, pos.y + delta.y));
+    }
 
     float keysize = 60.0f;
     float spacing = 6.0f;
@@ -161,13 +158,19 @@ static void drawmenu() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    ImGui::InvisibleButton("##sp", ImVec2(halfwidth, keysize)); ImGui::SameLine();
+    // W
+    ImGui::SetCursorPosX(halfwidth + spacing);
     drawkey("W", k.w, ImVec2(keysize, keysize));
+
+    // ASD
     drawkey("A", k.a, ImVec2(keysize, keysize)); ImGui::SameLine();
     drawkey("S", k.s, ImVec2(keysize, keysize)); ImGui::SameLine();
     drawkey("D", k.d, ImVec2(keysize, keysize));
+
+    // SPACE
     drawkey("SPACE", k.space, ImVec2(rowwidth, keysize));
     
+    // LMB / RMB
     float halfrow = (rowwidth - spacing) / 2.0f;
     drawkey("LMB", k.lmb, ImVec2(halfrow, keysize)); ImGui::SameLine();
     drawkey("RMB", k.rmb, ImVec2(halfrow, keysize));
@@ -176,7 +179,6 @@ static void drawmenu() {
     ImGui::End();
 }
 
-// --- Standard Setup/Render/Init remains the same ---
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     ImGui::CreateContext();
