@@ -16,6 +16,8 @@
 
 #include <mutex>
 
+// ─── Key state ───────────────────────────────────────────────────────────────
+
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
     bool space = false, lmb = false, rmb = false;
@@ -24,58 +26,71 @@ struct KeyState {
 static KeyState g_keys;
 static std::mutex g_keymutex;
 
+// Android keycodes
 #define AKEYCODE_W     51
 #define AKEYCODE_A     29
 #define AKEYCODE_S     47
 #define AKEYCODE_D     32
 #define AKEYCODE_SPACE 62
 
-static bool       g_initialized   = false;
-static int        g_width = 0, g_height = 0;
-static EGLContext g_targetcontext = EGL_NO_CONTEXT;
-static EGLSurface g_targetsurface = EGL_NO_SURFACE;
+// ─── EGL / ImGui state ───────────────────────────────────────────────────────
+
+static bool       g_initialized    = false;
+static int        g_width = 0,  g_height = 0;
+static EGLContext g_targetcontext  = EGL_NO_CONTEXT;
+static EGLSurface g_targetsurface  = EGL_NO_SURFACE;
 
 static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
+static void       (*orig_input1)(void*, void*, void*)            = nullptr;
+static void       (*orig_keyinput)(void*, void*, void*)          = nullptr;
+static int32_t    (*orig_input2)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
 
-// ── AInputQueue_getEvent hook ────────────────────────────────────────────────
-static int32_t (*orig_getEvent)(AInputQueue*, AInputEvent**) = nullptr;
+// ─── Input hooks ─────────────────────────────────────────────────────────────
 
-static int32_t hook_getEvent(AInputQueue* queue, AInputEvent** outEvent) {
-    int32_t result = orig_getEvent(queue, outEvent);
-    if (result >= 0 && outEvent && *outEvent) {
-        AInputEvent* event = *outEvent;
-        int32_t type = AInputEvent_getType(event);
+// Motion event hook (mouse - already working)
+static void hook_input1(void* thiz, void* a1, void* a2) {
+    if (orig_input1) orig_input1(thiz, a1, a2);
+    if (a1 && g_initialized) {
+        AInputEvent* event = (AInputEvent*)a1;
+        ImGui_ImplAndroid_HandleInputEvent(event);
+        int32_t btnstate = AMotionEvent_getButtonState(event);
+        std::lock_guard<std::mutex> lock(g_keymutex);
+        g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
+        g_keys.rmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
+    }
+}
 
-        if (type == AINPUT_EVENT_TYPE_MOTION) {
-            int32_t btnstate = AMotionEvent_getButtonState(event);
+// Key event hook (WASD, Space - the fix)
+static void hook_keyinput(void* thiz, void* a1, void* a2) {
+    if (orig_keyinput) orig_keyinput(thiz, a1, a2);
+    if (a1 && g_initialized) {
+        AInputEvent* event = (AInputEvent*)a1;
+        int32_t keycode = AKeyEvent_getKeyCode(event);
+        int32_t action  = AKeyEvent_getAction(event);
+        bool pressed    = (action == AKEY_EVENT_ACTION_DOWN);
+        bool released   = (action == AKEY_EVENT_ACTION_UP);
+        if (pressed || released) {
             std::lock_guard<std::mutex> lock(g_keymutex);
-            g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
-            g_keys.rmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
-        }
-
-        if (type == AINPUT_EVENT_TYPE_KEY) {
-            int32_t keycode = AKeyEvent_getKeyCode(event);
-            int32_t action  = AKeyEvent_getAction(event);
-            bool pressed  = (action == AKEY_EVENT_ACTION_DOWN);
-            bool released = (action == AKEY_EVENT_ACTION_UP);
-            if (pressed || released) {
-                std::lock_guard<std::mutex> lock(g_keymutex);
-                switch (keycode) {
-                    case AKEYCODE_W:     g_keys.w     = pressed; break;
-                    case AKEYCODE_A:     g_keys.a     = pressed; break;
-                    case AKEYCODE_S:     g_keys.s     = pressed; break;
-                    case AKEYCODE_D:     g_keys.d     = pressed; break;
-                    case AKEYCODE_SPACE: g_keys.space = pressed; break;
-                }
+            switch (keycode) {
+                case AKEYCODE_W:     g_keys.w     = pressed; break;
+                case AKEYCODE_A:     g_keys.a     = pressed; break;
+                case AKEYCODE_S:     g_keys.s     = pressed; break;
+                case AKEYCODE_D:     g_keys.d     = pressed; break;
+                case AKEYCODE_SPACE: g_keys.space = pressed; break;
             }
         }
+    }
+}
 
-        if (g_initialized)
-            ImGui_ImplAndroid_HandleInputEvent(event);
+static int32_t hook_input2(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** event) {
+    int32_t result = orig_input2 ? orig_input2(thiz, a1, a2, a3, a4, event) : 0;
+    if (result == 0 && event && *event && g_initialized) {
+        ImGui_ImplAndroid_HandleInputEvent(*event);
     }
     return result;
 }
-// ────────────────────────────────────────────────────────────────────────────
+
+// ─── GL state save/restore ───────────────────────────────────────────────────
 
 struct glstate {
     GLint prog, tex, atex, abuf, ebuf, vao, fbo, vp[4], sc[4], bsrc, bdst;
@@ -83,17 +98,17 @@ struct glstate {
 };
 
 static void savegl(glstate& s) {
-    glGetIntegerv(GL_CURRENT_PROGRAM,              &s.prog);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D,           &s.tex);
-    glGetIntegerv(GL_ACTIVE_TEXTURE,               &s.atex);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING,         &s.abuf);
-    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &s.ebuf);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING,         &s.vao);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING,          &s.fbo);
-    glGetIntegerv(GL_VIEWPORT,                      s.vp);
-    glGetIntegerv(GL_SCISSOR_BOX,                   s.sc);
-    glGetIntegerv(GL_BLEND_SRC_ALPHA,              &s.bsrc);
-    glGetIntegerv(GL_BLEND_DST_ALPHA,              &s.bdst);
+    glGetIntegerv(GL_CURRENT_PROGRAM,               &s.prog);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D,            &s.tex);
+    glGetIntegerv(GL_ACTIVE_TEXTURE,                &s.atex);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING,          &s.abuf);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING,  &s.ebuf);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING,          &s.vao);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING,           &s.fbo);
+    glGetIntegerv(GL_VIEWPORT,                       s.vp);
+    glGetIntegerv(GL_SCISSOR_BOX,                    s.sc);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA,               &s.bsrc);
+    glGetIntegerv(GL_BLEND_DST_ALPHA,               &s.bdst);
     s.blend   = glIsEnabled(GL_BLEND);
     s.cull    = glIsEnabled(GL_CULL_FACE);
     s.depth   = glIsEnabled(GL_DEPTH_TEST);
@@ -111,25 +126,33 @@ static void restoregl(const glstate& s) {
     glViewport(s.vp[0], s.vp[1], s.vp[2], s.vp[3]);
     glScissor(s.sc[0], s.sc[1], s.sc[2], s.sc[3]);
     glBlendFunc(s.bsrc, s.bdst);
-    s.blend   ? glEnable(GL_BLEND)        : glDisable(GL_BLEND);
-    s.cull    ? glEnable(GL_CULL_FACE)    : glDisable(GL_CULL_FACE);
-    s.depth   ? glEnable(GL_DEPTH_TEST)   : glDisable(GL_DEPTH_TEST);
-    s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
+    s.blend   ? glEnable(GL_BLEND)       : glDisable(GL_BLEND);
+    s.cull    ? glEnable(GL_CULL_FACE)   : glDisable(GL_CULL_FACE);
+    s.depth   ? glEnable(GL_DEPTH_TEST)  : glDisable(GL_DEPTH_TEST);
+    s.scissor ? glEnable(GL_SCISSOR_TEST): glDisable(GL_SCISSOR_TEST);
 }
 
-static void drawkey(const char* label, bool pressed, ImVec2 size = ImVec2(60, 60)) {
+// ─── UI drawing ──────────────────────────────────────────────────────────────
+
+static void drawkey(const char* label, bool pressed) {
     ImVec4 color = pressed
         ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f)
-        : ImVec4(0.15f, 0.15f, 0.15f, 0.80f);
+        : ImVec4(0.2f, 0.2f, 0.2f, 0.75f);
     ImVec4 textcolor = pressed
         ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f)
         : ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
+
+    ImVec2 size(60, 60);
     ImGui::PushStyleColor(ImGuiCol_Button,        color);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  color);
     ImGui::PushStyleColor(ImGuiCol_Text,          textcolor);
     ImGui::Button(label, size);
     ImGui::PopStyleColor(4);
+}
+
+static void drawspacer(float width) {
+    ImGui::InvisibleButton("##spacer", ImVec2(width, 60));
 }
 
 static void drawmenu() {
@@ -141,46 +164,42 @@ static void drawmenu() {
 
     ImGui::SetNextWindowPos(ImVec2(10, 90), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.0f);
-    ImGui::Begin("Keystrokes", nullptr,
-        ImGuiWindowFlags_NoTitleBar        |
-        ImGuiWindowFlags_AlwaysAutoResize  |
-        ImGuiWindowFlags_NoScrollbar       |
-        ImGuiWindowFlags_NoBackground      |
+    ImGui::Begin("##keystrokes", nullptr,
+        ImGuiWindowFlags_NoTitleBar       |
+        ImGuiWindowFlags_NoResize         |
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoScrollbar      |
+        ImGuiWindowFlags_NoBackground     |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(5, 5));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(6, 6));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    ImGui::InvisibleButton("##drag", ImVec2(198, 8));
-    if (ImGui::IsItemActive()) {
-        ImVec2 delta = ImGui::GetIO().MouseDelta;
-        ImVec2 pos   = ImGui::GetWindowPos();
-        ImGui::SetWindowPos(ImVec2(pos.x + delta.x, pos.y + delta.y));
-    }
-
-    // Row 1: [W] centered
-    ImGui::InvisibleButton("##sp1", ImVec2(65, 60));
+    // Row 1: [W] centered over ASD
+    drawspacer(66);
     ImGui::SameLine();
     drawkey("W", k.w);
 
-    // Row 2: [A][S][D]
+    // Row 2: [A] [S] [D]
     drawkey("A", k.a);
     ImGui::SameLine();
     drawkey("S", k.s);
     ImGui::SameLine();
     drawkey("D", k.d);
 
-    // Row 3: [SPACE]
-    drawkey("SPACE", k.space, ImVec2(198, 60));
+    // Row 3: [  SPACE  ]
+    drawkey("     SPACE     ", k.space);
 
-    // Row 4: [LMB][RMB]
-    drawkey("LMB", k.lmb, ImVec2(96, 60));
+    // Row 4: [LMB] [RMB]
+    drawkey("LMB", k.lmb);
     ImGui::SameLine();
-    drawkey("RMB", k.rmb, ImVec2(96, 60));
+    drawkey("RMB", k.rmb);
 
     ImGui::PopStyleVar(2);
     ImGui::End();
 }
+
+// ─── ImGui setup & render ────────────────────────────────────────────────────
 
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
@@ -223,6 +242,8 @@ static void render() {
     restoregl(s);
 }
 
+// ─── EGL swap hook ───────────────────────────────────────────────────────────
+
 static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     if (!orig_eglswapbuffers) return EGL_FALSE;
 
@@ -255,26 +276,21 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     return orig_eglswapbuffers(dpy, surf);
 }
 
-static void hookinput() {
-    // Hook AInputQueue_getEvent from libandroid.so
-    // This catches ALL input events including keyboard (WASD, Space)
-    GHandle hlib = GlossOpen("libandroid.so");
-    if (hlib) {
-        void* sym = (void*)GlossSymbol(hlib, "AInputQueue_getEvent", nullptr);
-        if (sym) {
-            GlossHook(sym, (void*)hook_getEvent, (void**)&orig_getEvent);
-            return;
-        }
-    }
+// ─── Hook init ───────────────────────────────────────────────────────────────
 
-    // Fallback: try AInputQueue_getEvent via dlsym
-    void* libandroid = dlopen("libandroid.so", RTLD_NOW | RTLD_NOLOAD);
-    if (libandroid) {
-        void* sym = dlsym(libandroid, "AInputQueue_getEvent");
-        if (sym) {
-            GlossHook(sym, (void*)hook_getEvent, (void**)&orig_getEvent);
-        }
-    }
+static void hookinput() {
+    GHandle hlib = GlossOpen("libinput.so");
+    if (!hlib) return;
+
+    // Motion events (mouse - already working)
+    void* sym1 = (void*)GlossSymbol(hlib,
+        "_ZN7android13InputConsumer21initializeMotionEventEPNS_11MotionEventEPKNS_12InputMessageE", nullptr);
+    if (sym1) GlossHook(sym1, (void*)hook_input1, (void**)&orig_input1);
+
+    // Key events (WASD, Space - the fix)
+    void* sym2 = (void*)GlossSymbol(hlib,
+        "_ZN7android13InputConsumer18initializeKeyEventEPNS_8KeyEventEPKNS_12InputMessageE", nullptr);
+    if (sym2) GlossHook(sym2, (void*)hook_keyinput, (void**)&orig_keyinput);
 }
 
 static void* mainthread(void*) {
