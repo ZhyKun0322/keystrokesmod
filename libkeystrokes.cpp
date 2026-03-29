@@ -39,6 +39,32 @@ static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
 static void       (*orig_input1)(void*, void*, void*)            = nullptr;
 static int32_t    (*orig_input2)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
 
+// ── NEW: hook for GameActivity key dispatch ──────────────────────────────────
+static bool (*orig_onkeydown)(void*, int32_t, AInputEvent*) = nullptr;
+static bool (*orig_onkeyup)(void*, int32_t, AInputEvent*)   = nullptr;
+
+static void updatekey(int32_t keycode, bool pressed) {
+    std::lock_guard<std::mutex> lock(g_keymutex);
+    switch (keycode) {
+        case AKEYCODE_W:     g_keys.w     = pressed; break;
+        case AKEYCODE_A:     g_keys.a     = pressed; break;
+        case AKEYCODE_S:     g_keys.s     = pressed; break;
+        case AKEYCODE_D:     g_keys.d     = pressed; break;
+        case AKEYCODE_SPACE: g_keys.space = pressed; break;
+    }
+}
+
+static bool hook_onkeydown(void* thiz, int32_t keycode, AInputEvent* event) {
+    updatekey(keycode, true);
+    return orig_onkeydown ? orig_onkeydown(thiz, keycode, event) : false;
+}
+
+static bool hook_onkeyup(void* thiz, int32_t keycode, AInputEvent* event) {
+    updatekey(keycode, false);
+    return orig_onkeyup ? orig_onkeyup(thiz, keycode, event) : false;
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 static void handleevent(AInputEvent* event) {
     if (!event) return;
     int32_t type = AInputEvent_getType(event);
@@ -56,14 +82,7 @@ static void handleevent(AInputEvent* event) {
         bool pressed    = (action == AKEY_EVENT_ACTION_DOWN);
         bool released   = (action == AKEY_EVENT_ACTION_UP);
         if (!pressed && !released) return;
-        std::lock_guard<std::mutex> lock(g_keymutex);
-        switch (keycode) {
-            case AKEYCODE_W:     g_keys.w     = pressed; break;
-            case AKEYCODE_A:     g_keys.a     = pressed; break;
-            case AKEYCODE_S:     g_keys.s     = pressed; break;
-            case AKEYCODE_D:     g_keys.d     = pressed; break;
-            case AKEYCODE_SPACE: g_keys.space = pressed; break;
-        }
+        updatekey(keycode, pressed);
     }
 }
 
@@ -159,7 +178,6 @@ static void drawmenu() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(5, 5));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    // Invisible drag handle so window is movable
     ImGui::InvisibleButton("##drag", ImVec2(198, 8));
     if (ImGui::IsItemActive()) {
         ImVec2 delta = ImGui::GetIO().MouseDelta;
@@ -265,6 +283,23 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
 }
 
 static void hookinput() {
+    // ── Try GameActivity key hooks first (most reliable for WASD/Space) ──────
+    GHandle hga = GlossOpen("libgameactivity.so");
+    if (hga) {
+        // onKeyDown
+        void* kd = (void*)GlossSymbol(hga,
+            "_ZN7android12GameActivity9onKeyDownEiP11AInputEvent", nullptr);
+        if (kd) GlossHook(kd, (void*)hook_onkeydown, (void**)&orig_onkeydown);
+
+        // onKeyUp
+        void* ku = (void*)GlossSymbol(hga,
+            "_ZN7android12GameActivity7onKeyUpEiP11AInputEvent", nullptr);
+        if (ku) GlossHook(ku, (void*)hook_onkeyup, (void**)&orig_onkeyup);
+
+        if (orig_onkeydown || orig_onkeyup) return; // got at least one, done
+    }
+
+    // ── Fallback: libinput.so consume path (catches motion + some key events) ─
     void* sym1 = (void*)GlossSymbol(GlossOpen("libinput.so"),
         "_ZN7android13InputConsumer21initializeMotionEventEPNS_11MotionEventEPKNS_12InputMessageE", nullptr);
     if (sym1) {
@@ -275,8 +310,7 @@ static void hookinput() {
     void* sym2 = (void*)GlossSymbol(GlossOpen("libinput.so"),
         "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE", nullptr);
     if (sym2) {
-        GHook h = GlossHook(sym2, (void*)hook_input2, (void**)&orig_input2);
-        if (h) return;
+        GlossHook(sym2, (void*)hook_input2, (void**)&orig_input2);
     }
 }
 
