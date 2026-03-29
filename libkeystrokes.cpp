@@ -269,8 +269,8 @@ static void drawmenu() {
         g_hudpos.x += delta.x;
         g_hudpos.y += delta.y;
         // Clamp to screen
-        g_hudpos.x = ImMax(0.0f, ImMin(g_hudpos.x, (float)g_width  - rowwidth - 20.0f));
-        g_hudpos.y = ImMax(0.0f, ImMin(g_hudpos.y, (float)g_height - ks * 4.0f - 40.0f));
+        g_hudpos.x = fmaxf(0.0f, fminf(g_hudpos.x, (float)g_width  - rowwidth - 20.0f));
+        g_hudpos.y = fmaxf(0.0f, fminf(g_hudpos.y, (float)g_height - ks * 4.0f - 40.0f));
         ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
         savecfg();
     }
