@@ -6,7 +6,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -fvisibility=hidden -ffunction-sections -fdata-sections -fexceptions -w")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -fvisibility=hidden -ffunction-sections -fdata-sections -w")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--gc-sections -Wl,--allow-shlib-undefined")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--gc-sections,--strip-all -s")
+
+include(FetchContent)
+
+FetchContent_Declare(fmt GIT_REPOSITORY https://github.com/fmtlib/fmt.git GIT_TAG 10.2.1)
+FetchContent_MakeAvailable(fmt)
+
+FetchContent_Declare(preloader GIT_REPOSITORY https://github.com/LiteLDev/preloader-android.git GIT_TAG main)
+FetchContent_MakeAvailable(preloader)
+
+target_link_libraries(preloader PUBLIC fmt::fmt)
 
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
@@ -25,4 +35,4 @@ set(SOURCES
 )
 
 add_library(keystrokes SHARED ${SOURCES})
-target_link_libraries(keystrokes log android EGL GLESv3 GLESv2)
+target_link_libraries(keystrokes preloader log android EGL GLESv3 GLESv2)
