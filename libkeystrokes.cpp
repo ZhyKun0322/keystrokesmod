@@ -17,7 +17,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
-#define VERSION "1.0.4"
+#define VERSION "1.0.5"
 
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
@@ -106,6 +106,7 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
     return result;
 }
 
+// ─── GL State Save/Restore ───────────────────────────────────────────────────
 struct glstate {
     GLint prog, tex, atex, abuf, ebuf, vao, fbo, vp[4], sc[4], bsrc, bdst;
     GLboolean blend, cull, depth, scissor;
@@ -148,29 +149,29 @@ static void drawkey(const char* label, bool pressed, ImVec2 size) {
 
 static void drawsettings(ImVec2 hudpos) {
     float confW = 480.0f; 
-    float confH = 350.0f; 
+    float confH = 380.0f; 
 
     ImGui::SetNextWindowPos(hudpos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(confW, confH), ImGuiCond_Always);
     
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.09f, 0.09f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.08f, 0.98f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(25, 25));
 
     ImGui::Begin("##config", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
 
-    // Scrollable child area
-    ImGui::BeginChild("##scroll_settings", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    // Scrollable area
+    ImGui::BeginChild("##scroll", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
-    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "HUD SETTINGS");
+    ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "HUD CONFIGURATION");
     ImGui::Separator();
-    ImGui::Dummy(ImVec2(0, 10));
-
-    // 1. Size / DPI
-    ImGui::Text("Size: %.0f px", g_keysize);
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##size", &g_keysize, 30.0f, 200.0f, "")) savecfg();
     ImGui::Dummy(ImVec2(0, 15));
+
+    // 1. DPI / Size
+    ImGui::Text("Size (DPI): %.0f px", g_keysize);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("##size", &g_keysize, 40.0f, 200.0f, "")) savecfg();
+    ImGui::Dummy(ImVec2(0, 20));
 
     // 2. Opacity
     float op = g_opacity * 100.0f;
@@ -180,17 +181,21 @@ static void drawsettings(ImVec2 hudpos) {
         g_opacity = op / 100.0f;
         savecfg();
     }
-    ImGui::Dummy(ImVec2(0, 15));
+    ImGui::Dummy(ImVec2(0, 20));
 
-    // 3. Lock
-    if (ImGui::Checkbox("Lock Position", &g_locked)) savecfg();
-    
-    ImGui::Dummy(ImVec2(0, 50)); 
+    // 3. Lock Position
+    // Increased size for mobile touch
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
+    if (ImGui::Checkbox("Lock HUD Position", &g_locked)) savecfg();
+    ImGui::PopStyleVar();
+
+    ImGui::Dummy(ImVec2(0, 60)); // Scroll buffer
     ImGui::EndChild();
 
-    // FIXED CLOSE LOGIC:
-    // Close ONLY if the user clicks and is NOT touching the window or its contents.
-    if (ImGui::IsMouseClicked(0) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)) {
+    // ─── IMPROVED CLOSE LOGIC ───
+    // We check if the mouse is clicked AND that NO items are currently being touched/active.
+    // This prevents the menu from closing when you click the checkbox or drag a slider.
+    if (ImGui::IsMouseClicked(0) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive()) {
         g_showsettings = false;
     }
 
@@ -212,7 +217,7 @@ static void drawmenu() {
     bool isInside = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hudW &&
                      io.MousePos.y >= g_hudpos.y && io.MousePos.y <= g_hudpos.y + hudH);
 
-    // Long press logic
+    // Swap Logic
     if (isInside && io.MouseDown[0] && !g_pressing && !g_showsettings) {
         g_pressing = true;
         g_pressstart = nowsec();
@@ -257,7 +262,7 @@ static void drawmenu() {
     }
 }
 
-// ─── Setup & Hooks (Omitted for length, keep your existing ones) ───
+// ─── Main Logic ───
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     loadcfg();
