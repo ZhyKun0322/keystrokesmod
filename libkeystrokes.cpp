@@ -35,57 +35,67 @@ static std::mutex g_keymutex;
 
 // ─── EGL / ImGui state ───────────────────────────────────────────────────────
 
-static bool       g_initialized    = false;
-static int        g_width = 0,  g_height = 0;
-static EGLContext g_targetcontext  = EGL_NO_CONTEXT;
-static EGLSurface g_targetsurface  = EGL_NO_SURFACE;
+static bool       g_initialized   = false;
+static int        g_width = 0, g_height = 0;
+static EGLContext g_targetcontext = EGL_NO_CONTEXT;
+static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 
 static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
-static void       (*orig_input1)(void*, void*, void*)            = nullptr;
-static void       (*orig_keyinput)(void*, void*, void*)          = nullptr;
-static int32_t    (*orig_input2)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
+static void       (*orig_motioninput)(void*, void*, void*)        = nullptr;
+static void       (*orig_keyinput)(void*, void*, void*)           = nullptr;
 
 // ─── Input hooks ─────────────────────────────────────────────────────────────
 
-// Motion event hook (mouse - already working)
-static void hook_input1(void* thiz, void* a1, void* a2) {
-    if (orig_input1) orig_input1(thiz, a1, a2);
-    if (a1 && g_initialized) {
-        AInputEvent* event = (AInputEvent*)a1;
-        ImGui_ImplAndroid_HandleInputEvent(event);
-        int32_t btnstate = AMotionEvent_getButtonState(event);
-        std::lock_guard<std::mutex> lock(g_keymutex);
-        g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
-        g_keys.rmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
-    }
+// initializeMotionEvent(this, MotionEvent* out, InputMessage* msg)
+// We only need it for LMB/RMB — read button state from the InputMessage (a2)
+// DO NOT cast a1 to AInputEvent* — it's a C++ MotionEvent object, not NDK type
+static void hook_motioninput(void* thiz, void* a1, void* a2) {
+    if (orig_motioninput) orig_motioninput(thiz, a1, a2);
+    // After the original runs, a1 is a fully populated MotionEvent C++ object.
+    // We can't safely use NDK AMotionEvent_* on it, so instead track button
+    // state via the raw InputMessage action in a2.
+    // Safest approach: just check global mouse button state via a flag set
+    // from the consume hook below which has the proper AInputEvent*.
 }
 
-// Key event hook (WASD, Space - the fix)
+// initializeKeyEvent(this, KeyEvent* out, InputMessage* msg)
+// Same pattern — after orig runs, a1 is a C++ KeyEvent object.
+// We read keycode/action from it using the known memory layout offsets.
+// KeyEvent layout (AOSP): action@0x18, keyCode@0x1C (arm64, varies by version)
+// Safer: we hook consume instead for key state too — see below.
 static void hook_keyinput(void* thiz, void* a1, void* a2) {
     if (orig_keyinput) orig_keyinput(thiz, a1, a2);
-    if (a1 && g_initialized) {
-        AInputEvent* event = (AInputEvent*)a1;
-        int32_t keycode = AKeyEvent_getKeyCode(event);
-        int32_t action  = AKeyEvent_getAction(event);
-        bool pressed    = (action == AKEY_EVENT_ACTION_DOWN);
-        bool released   = (action == AKEY_EVENT_ACTION_UP);
-        if (pressed || released) {
-            std::lock_guard<std::mutex> lock(g_keymutex);
-            switch (keycode) {
-                case AKEYCODE_W:     g_keys.w     = pressed; break;
-                case AKEYCODE_A:     g_keys.a     = pressed; break;
-                case AKEYCODE_S:     g_keys.s     = pressed; break;
-                case AKEYCODE_D:     g_keys.d     = pressed; break;
-                case AKEYCODE_SPACE: g_keys.space = pressed; break;
-            }
-        }
+    // a1 is C++ KeyEvent*, read action and keycode at known offsets
+    if (!a1) return;
+    // AOSP KeyEvent offsets (arm64): keyCode at +0x1C, action at +0x18
+    int32_t action  = *reinterpret_cast<int32_t*>((uint8_t*)a1 + 0x18);
+    int32_t keycode = *reinterpret_cast<int32_t*>((uint8_t*)a1 + 0x1C);
+    bool pressed  = (action == AKEY_EVENT_ACTION_DOWN);
+    bool released = (action == AKEY_EVENT_ACTION_UP);
+    if (!pressed && !released) return;
+    std::lock_guard<std::mutex> lock(g_keymutex);
+    switch (keycode) {
+        case AKEYCODE_W:     g_keys.w     = pressed; break;
+        case AKEYCODE_A:     g_keys.a     = pressed; break;
+        case AKEYCODE_S:     g_keys.s     = pressed; break;
+        case AKEYCODE_D:     g_keys.d     = pressed; break;
+        case AKEYCODE_SPACE: g_keys.space = pressed; break;
     }
 }
 
-static int32_t hook_input2(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** event) {
-    int32_t result = orig_input2 ? orig_input2(thiz, a1, a2, a3, a4, event) : 0;
-    if (result == 0 && event && *event && g_initialized) {
-        ImGui_ImplAndroid_HandleInputEvent(*event);
+// consume() gives us a real AInputEvent* via NDK — safe for mouse buttons
+static int32_t (*orig_consume)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
+static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent) {
+    int32_t result = orig_consume ? orig_consume(thiz, a1, a2, a3, a4, outEvent) : 0;
+    if (result == 0 && outEvent && *outEvent) {
+        AInputEvent* event = *outEvent;
+        int32_t type = AInputEvent_getType(event);
+        if (type == AINPUT_EVENT_TYPE_MOTION) {
+            int32_t btnstate = AMotionEvent_getButtonState(event);
+            std::lock_guard<std::mutex> lock(g_keymutex);
+            g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
+            g_keys.rmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
+        }
     }
     return result;
 }
@@ -126,23 +136,21 @@ static void restoregl(const glstate& s) {
     glViewport(s.vp[0], s.vp[1], s.vp[2], s.vp[3]);
     glScissor(s.sc[0], s.sc[1], s.sc[2], s.sc[3]);
     glBlendFunc(s.bsrc, s.bdst);
-    s.blend   ? glEnable(GL_BLEND)       : glDisable(GL_BLEND);
-    s.cull    ? glEnable(GL_CULL_FACE)   : glDisable(GL_CULL_FACE);
-    s.depth   ? glEnable(GL_DEPTH_TEST)  : glDisable(GL_DEPTH_TEST);
-    s.scissor ? glEnable(GL_SCISSOR_TEST): glDisable(GL_SCISSOR_TEST);
+    s.blend   ? glEnable(GL_BLEND)        : glDisable(GL_BLEND);
+    s.cull    ? glEnable(GL_CULL_FACE)    : glDisable(GL_CULL_FACE);
+    s.depth   ? glEnable(GL_DEPTH_TEST)   : glDisable(GL_DEPTH_TEST);
+    s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
 }
 
 // ─── UI drawing ──────────────────────────────────────────────────────────────
 
-static void drawkey(const char* label, bool pressed) {
+static void drawkey(const char* label, bool pressed, ImVec2 size = ImVec2(60, 60)) {
     ImVec4 color = pressed
         ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f)
         : ImVec4(0.2f, 0.2f, 0.2f, 0.75f);
     ImVec4 textcolor = pressed
         ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f)
         : ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
-
-    ImVec2 size(60, 60);
     ImGui::PushStyleColor(ImGuiCol_Button,        color);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  color);
@@ -151,16 +159,19 @@ static void drawkey(const char* label, bool pressed) {
     ImGui::PopStyleColor(4);
 }
 
-static void drawspacer(float width) {
-    ImGui::InvisibleButton("##spacer", ImVec2(width, 60));
-}
-
 static void drawmenu() {
     KeyState k;
     {
         std::lock_guard<std::mutex> lock(g_keymutex);
         k = g_keys;
     }
+
+    // Calculate widths based on key size + spacing
+    // 3 keys wide = 3*60 + 2*6 = 192
+    float keysize   = 60.0f;
+    float spacing   = 6.0f;
+    float rowwidth  = keysize * 3 + spacing * 2; // 192
+    float halfwidth = rowwidth / 2.0f - keysize / 2.0f; // center W
 
     ImGui::SetNextWindowPos(ImVec2(10, 90), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.0f);
@@ -172,11 +183,11 @@ static void drawmenu() {
         ImGuiWindowFlags_NoBackground     |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(6, 6));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    // Row 1: [W] centered over ASD
-    drawspacer(66);
+    // Row 1: [W] centered
+    ImGui::InvisibleButton("##sp", ImVec2(halfwidth, keysize));
     ImGui::SameLine();
     drawkey("W", k.w);
 
@@ -187,13 +198,14 @@ static void drawmenu() {
     ImGui::SameLine();
     drawkey("D", k.d);
 
-    // Row 3: [  SPACE  ]
-    drawkey("     SPACE     ", k.space);
+    // Row 3: [SPACE] full width
+    drawkey("SPACE", k.space, ImVec2(rowwidth, keysize));
 
     // Row 4: [LMB] [RMB]
-    drawkey("LMB", k.lmb);
+    float halfrow = (rowwidth - spacing) / 2.0f;
+    drawkey("LMB", k.lmb, ImVec2(halfrow, keysize));
     ImGui::SameLine();
-    drawkey("RMB", k.rmb);
+    drawkey("RMB", k.rmb, ImVec2(halfrow, keysize));
 
     ImGui::PopStyleVar(2);
     ImGui::End();
@@ -282,15 +294,15 @@ static void hookinput() {
     GHandle hlib = GlossOpen("libinput.so");
     if (!hlib) return;
 
-    // Motion events (mouse - already working)
-    void* sym1 = (void*)GlossSymbol(hlib,
-        "_ZN7android13InputConsumer21initializeMotionEventEPNS_11MotionEventEPKNS_12InputMessageE", nullptr);
-    if (sym1) GlossHook(sym1, (void*)hook_input1, (void**)&orig_input1);
-
-    // Key events (WASD, Space - the fix)
-    void* sym2 = (void*)GlossSymbol(hlib,
+    // Key events — initializeKeyEvent (WASD, Space)
+    void* symkey = (void*)GlossSymbol(hlib,
         "_ZN7android13InputConsumer18initializeKeyEventEPNS_8KeyEventEPKNS_12InputMessageE", nullptr);
-    if (sym2) GlossHook(sym2, (void*)hook_keyinput, (void**)&orig_keyinput);
+    if (symkey) GlossHook(symkey, (void*)hook_keyinput, (void**)&orig_keyinput);
+
+    // Mouse buttons — consume() gives us a safe AInputEvent* for LMB/RMB
+    void* symconsume = (void*)GlossSymbol(hlib,
+        "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE", nullptr);
+    if (symconsume) GlossHook(symconsume, (void*)hook_consume, (void**)&orig_consume);
 }
 
 static void* mainthread(void*) {
