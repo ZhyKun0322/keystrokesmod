@@ -23,6 +23,11 @@ struct KeyState {
 static KeyState g_keys;
 static std::mutex g_keymutex;
 
+// --- Global Settings ---
+static float g_opacity = 0.0f;      // Window background opacity
+static float g_ui_scale = 1.0f;     // Custom scaling (DPI)
+static bool  g_show_settings = false;
+
 // Standard Android Keycodes
 #define AKEYCODE_W     51
 #define AKEYCODE_A     29
@@ -39,29 +44,21 @@ static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
 static int32_t (*orig_consume)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
 
-// --- The Fixed Input Hook ---
-// We use AInputEvent* which is the official NDK way. Works on Android 14.
 static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent) {
     int32_t result = orig_consume ? orig_consume(thiz, a1, a2, a3, a4, outEvent) : 0;
-    
     if (result == 0 && outEvent && *outEvent) {
         AInputEvent* event = *outEvent;
         int32_t type = AInputEvent_getType(event);
-        
         std::lock_guard<std::mutex> lock(g_keymutex);
-
         if (type == AINPUT_EVENT_TYPE_MOTION) {
-            // Handle Mouse Buttons
             int32_t btnstate = AMotionEvent_getButtonState(event);
             g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY) != 0;
             g_keys.rmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
         } 
         else if (type == AINPUT_EVENT_TYPE_KEY) {
-            // Handle Keyboard (WASD + Space)
             int32_t action = AKeyEvent_getAction(event);
             int32_t keycode = AKeyEvent_getKeyCode(event);
             bool isPressed = (action == AKEY_EVENT_ACTION_DOWN);
-
             switch (keycode) {
                 case AKEYCODE_W:     g_keys.w     = isPressed; break;
                 case AKEYCODE_A:     g_keys.a     = isPressed; break;
@@ -116,7 +113,7 @@ static void restoregl(const glstate& s) {
 }
 
 // --- UI Logic ---
-static void drawkey(const char* label, bool pressed, ImVec2 size = ImVec2(60, 60)) {
+static void drawkey(const char* label, bool pressed, ImVec2 size) {
     ImVec4 color = pressed ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f) : ImVec4(0.2f, 0.2f, 0.2f, 0.75f);
     ImVec4 textcolor = pressed ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f) : ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
     ImGui::PushStyleColor(ImGuiCol_Button, color);
@@ -134,30 +131,58 @@ static void drawmenu() {
         k = g_keys;
     }
 
-    float keysize = 60.0f;
-    float spacing = 6.0f;
-    float rowwidth = keysize * 3 + spacing * 2;
-    float halfwidth = rowwidth / 2.0f - keysize / 2.0f;
+    // Dynamic sizing based on user scale
+    float base_keysize = 60.0f * g_ui_scale;
+    float spacing = 6.0f * g_ui_scale;
+    float rowwidth = base_keysize * 3 + spacing * 2;
+    float halfwidth = rowwidth / 2.0f - base_keysize / 2.0f;
 
+    // Window style
+    ImGui::SetNextWindowBgAlpha(g_opacity);
     ImGui::SetNextWindowPos(ImVec2(10, 90), ImGuiCond_FirstUseEver);
-    ImGui::Begin("##keystrokes", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    // Keystrokes Window (Moveable)
+    ImGui::Begin("Keystrokes", nullptr, 
+        ImGuiWindowFlags_NoTitleBar       | 
+        ImGuiWindowFlags_AlwaysAutoResize | 
+        ImGuiWindowFlags_NoScrollbar      | 
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    // Toggle settings on Right-Click/Long-Press
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseReleased(1)) {
+        g_show_settings = !g_show_settings;
+    }
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f * g_ui_scale);
 
-    ImGui::InvisibleButton("##sp", ImVec2(halfwidth, keysize)); ImGui::SameLine();
-    drawkey("W", k.w);
-    drawkey("A", k.a); ImGui::SameLine();
-    drawkey("S", k.s); ImGui::SameLine();
-    drawkey("D", k.d);
-    drawkey("SPACE", k.space, ImVec2(rowwidth, keysize));
+    // Layout
+    ImGui::InvisibleButton("##sp", ImVec2(halfwidth, base_keysize)); ImGui::SameLine();
+    drawkey("W", k.w, ImVec2(base_keysize, base_keysize));
+    
+    drawkey("A", k.a, ImVec2(base_keysize, base_keysize)); ImGui::SameLine();
+    drawkey("S", k.s, ImVec2(base_keysize, base_keysize)); ImGui::SameLine();
+    drawkey("D", k.d, ImVec2(base_keysize, base_keysize));
+    
+    drawkey("SPACE", k.space, ImVec2(rowwidth, base_keysize));
     
     float halfrow = (rowwidth - spacing) / 2.0f;
-    drawkey("LMB", k.lmb, ImVec2(halfrow, keysize)); ImGui::SameLine();
-    drawkey("RMB", k.rmb, ImVec2(halfrow, keysize));
+    drawkey("LMB", k.lmb, ImVec2(halfrow, base_keysize)); ImGui::SameLine();
+    drawkey("RMB", k.rmb, ImVec2(halfrow, base_keysize));
 
     ImGui::PopStyleVar(2);
     ImGui::End();
+
+    // Settings Menu
+    if (g_show_settings) {
+        ImGui::Begin("Mod Settings", &g_show_settings, ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::Text("Configuration");
+        ImGui::Separator();
+        ImGui::SliderFloat("Opacity", &g_opacity, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Scale", &g_ui_scale, 0.5f, 3.0f, "%.1f");
+        if (ImGui::Button("Close")) g_show_settings = false;
+        ImGui::End();
+    }
 }
 
 // --- Setup & Main Loop ---
