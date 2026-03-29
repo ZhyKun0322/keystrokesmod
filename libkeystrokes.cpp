@@ -16,8 +16,6 @@
 
 #include <mutex>
 
-// ─── Key state ───────────────────────────────────────────────────────────────
-
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
     bool space = false, lmb = false, rmb = false;
@@ -26,14 +24,11 @@ struct KeyState {
 static KeyState g_keys;
 static std::mutex g_keymutex;
 
-// Android keycodes
 #define AKEYCODE_W     51
 #define AKEYCODE_A     29
 #define AKEYCODE_S     47
 #define AKEYCODE_D     32
 #define AKEYCODE_SPACE 62
-
-// ─── EGL / ImGui state ───────────────────────────────────────────────────────
 
 static bool       g_initialized    = false;
 static int        g_width = 0,  g_height = 0;
@@ -44,15 +39,11 @@ static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
 static void       (*orig_input1)(void*, void*, void*)            = nullptr;
 static int32_t    (*orig_input2)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
 
-// ─── Input hooks ─────────────────────────────────────────────────────────────
-
 static void handleevent(AInputEvent* event) {
     if (!event) return;
-
     int32_t type = AInputEvent_getType(event);
 
     if (type == AINPUT_EVENT_TYPE_MOTION) {
-        int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
         int32_t btnstate = AMotionEvent_getButtonState(event);
         std::lock_guard<std::mutex> lock(g_keymutex);
         g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
@@ -63,6 +54,8 @@ static void handleevent(AInputEvent* event) {
         int32_t keycode = AKeyEvent_getKeyCode(event);
         int32_t action  = AKeyEvent_getAction(event);
         bool pressed    = (action == AKEY_EVENT_ACTION_DOWN);
+        bool released   = (action == AKEY_EVENT_ACTION_UP);
+        if (!pressed && !released) return;
         std::lock_guard<std::mutex> lock(g_keymutex);
         switch (keycode) {
             case AKEYCODE_W:     g_keys.w     = pressed; break;
@@ -91,8 +84,6 @@ static int32_t hook_input2(void* thiz, void* a1, bool a2, long a3, uint32_t* a4,
     }
     return result;
 }
-
-// ─── GL state save/restore ───────────────────────────────────────────────────
 
 struct glstate {
     GLint prog, tex, atex, abuf, ebuf, vao, fbo, vp[4], sc[4], bsrc, bdst;
@@ -134,27 +125,19 @@ static void restoregl(const glstate& s) {
     s.scissor ? glEnable(GL_SCISSOR_TEST): glDisable(GL_SCISSOR_TEST);
 }
 
-// ─── UI drawing ──────────────────────────────────────────────────────────────
-
-static void drawkey(const char* label, bool pressed) {
+static void drawkey(const char* label, bool pressed, ImVec2 size = ImVec2(60, 60)) {
     ImVec4 color = pressed
-        ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f)   // bright white when pressed
-        : ImVec4(0.2f, 0.2f, 0.2f, 0.75f);   // dark when released
+        ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f)
+        : ImVec4(0.15f, 0.15f, 0.15f, 0.80f);
     ImVec4 textcolor = pressed
         ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f)
         : ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
-
-    ImVec2 size(60, 60);
     ImGui::PushStyleColor(ImGuiCol_Button,        color);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  color);
     ImGui::PushStyleColor(ImGuiCol_Text,          textcolor);
     ImGui::Button(label, size);
     ImGui::PopStyleColor(4);
-}
-
-static void drawspacer(float width) {
-    ImGui::InvisibleButton("##spacer", ImVec2(width, 60));
 }
 
 static void drawmenu() {
@@ -166,42 +149,47 @@ static void drawmenu() {
 
     ImGui::SetNextWindowPos(ImVec2(10, 90), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.0f);
-    ImGui::Begin("##keystrokes", nullptr,
-        ImGuiWindowFlags_NoTitleBar    |
-        ImGuiWindowFlags_NoResize      |
-        ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoScrollbar   |
-        ImGuiWindowFlags_NoBackground  |
+    ImGui::Begin("Keystrokes", nullptr,
+        ImGuiWindowFlags_NoTitleBar        |
+        ImGuiWindowFlags_AlwaysAutoResize  |
+        ImGuiWindowFlags_NoScrollbar       |
+        ImGuiWindowFlags_NoBackground      |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 6));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(5, 5));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    // Row 1: [W] centered over ASD
-    drawspacer(66);
+    // Invisible drag handle so window is movable
+    ImGui::InvisibleButton("##drag", ImVec2(198, 8));
+    if (ImGui::IsItemActive()) {
+        ImVec2 delta = ImGui::GetIO().MouseDelta;
+        ImVec2 pos   = ImGui::GetWindowPos();
+        ImGui::SetWindowPos(ImVec2(pos.x + delta.x, pos.y + delta.y));
+    }
+
+    // Row 1: [W] centered
+    ImGui::InvisibleButton("##sp1", ImVec2(65, 60));
     ImGui::SameLine();
     drawkey("W", k.w);
 
-    // Row 2: [A] [S] [D]
+    // Row 2: [A][S][D]
     drawkey("A", k.a);
     ImGui::SameLine();
     drawkey("S", k.s);
     ImGui::SameLine();
     drawkey("D", k.d);
 
-    // Row 3: [  SPACE  ]
-    drawkey("     SPACE     ", k.space);
+    // Row 3: [SPACE]
+    drawkey("SPACE", k.space, ImVec2(198, 60));
 
-    // Row 4: [LMB] [RMB]
-    drawkey("LMB", k.lmb);
+    // Row 4: [LMB][RMB]
+    drawkey("LMB", k.lmb, ImVec2(96, 60));
     ImGui::SameLine();
-    drawkey("RMB", k.rmb);
+    drawkey("RMB", k.rmb, ImVec2(96, 60));
 
     ImGui::PopStyleVar(2);
     ImGui::End();
 }
-
-// ─── ImGui setup & render ────────────────────────────────────────────────────
 
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
@@ -244,8 +232,6 @@ static void render() {
     restoregl(s);
 }
 
-// ─── EGL swap hook ───────────────────────────────────────────────────────────
-
 static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     if (!orig_eglswapbuffers) return EGL_FALSE;
 
@@ -277,8 +263,6 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
 
     return orig_eglswapbuffers(dpy, surf);
 }
-
-// ─── Hook init ───────────────────────────────────────────────────────────────
 
 static void hookinput() {
     void* sym1 = (void*)GlossSymbol(GlossOpen("libinput.so"),
