@@ -17,7 +17,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
-#define VERSION "1.0.5"
+#define VERSION "1.0.3"
 
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
