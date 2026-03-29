@@ -14,7 +14,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
-// --- Key state ---
+// --- State ---
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
     bool space = false, lmb = false, rmb = false;
@@ -22,20 +22,14 @@ struct KeyState {
 
 static KeyState g_keys;
 static std::mutex g_keymutex;
+static bool g_edit_mode = false; // Toggle this to move the window
 
-// --- Global Settings ---
-static float g_opacity = 0.0f;      // Window background opacity
-static float g_ui_scale = 1.0f;     // Custom scaling (DPI)
-static bool  g_show_settings = false;
-
-// Standard Android Keycodes
 #define AKEYCODE_W     51
 #define AKEYCODE_A     29
 #define AKEYCODE_S     47
 #define AKEYCODE_D     32
 #define AKEYCODE_SPACE 62
 
-// --- Globals ---
 static bool g_initialized = false;
 static int g_width = 0, g_height = 0;
 static EGLContext g_targetcontext = EGL_NO_CONTEXT;
@@ -44,12 +38,21 @@ static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
 static int32_t (*orig_consume)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
 
+// --- Fixed Hook: Passes touches to ImGui ---
 static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent) {
     int32_t result = orig_consume ? orig_consume(thiz, a1, a2, a3, a4, outEvent) : 0;
+    
     if (result == 0 && outEvent && *outEvent) {
         AInputEvent* event = *outEvent;
+        
+        // CRITICAL: This allows ImGui to see your finger for dragging
+        if (g_initialized) {
+            ImGui_ImplAndroid_HandleInputEvent(event);
+        }
+
         int32_t type = AInputEvent_getType(event);
         std::lock_guard<std::mutex> lock(g_keymutex);
+
         if (type == AINPUT_EVENT_TYPE_MOTION) {
             int32_t btnstate = AMotionEvent_getButtonState(event);
             g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY) != 0;
@@ -60,10 +63,10 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
             int32_t keycode = AKeyEvent_getKeyCode(event);
             bool isPressed = (action == AKEY_EVENT_ACTION_DOWN);
             switch (keycode) {
-                case AKEYCODE_W:     g_keys.w     = isPressed; break;
-                case AKEYCODE_A:     g_keys.a     = isPressed; break;
-                case AKEYCODE_S:     g_keys.s     = isPressed; break;
-                case AKEYCODE_D:     g_keys.d     = isPressed; break;
+                case AKEYCODE_W:     g_keys.w = isPressed; break;
+                case AKEYCODE_A:     g_keys.a = isPressed; break;
+                case AKEYCODE_S:     g_keys.s = isPressed; break;
+                case AKEYCODE_D:     g_keys.d = isPressed; break;
                 case AKEYCODE_SPACE: g_keys.space = isPressed; break;
             }
         }
@@ -71,7 +74,7 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
     return result;
 }
 
-// --- GL State Save/Restore ---
+// --- GL Save/Restore ---
 struct glstate {
     GLint prog, tex, atex, abuf, ebuf, vao, fbo, vp[4], sc[4], bsrc, bdst;
     GLboolean blend, cull, depth, scissor;
@@ -112,7 +115,6 @@ static void restoregl(const glstate& s) {
     s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
 }
 
-// --- UI Logic ---
 static void drawkey(const char* label, bool pressed, ImVec2 size) {
     ImVec4 color = pressed ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f) : ImVec4(0.2f, 0.2f, 0.2f, 0.75f);
     ImVec4 textcolor = pressed ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f) : ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
@@ -131,61 +133,50 @@ static void drawmenu() {
         k = g_keys;
     }
 
-    // Dynamic sizing based on user scale
-    float base_keysize = 60.0f * g_ui_scale;
-    float spacing = 6.0f * g_ui_scale;
-    float rowwidth = base_keysize * 3 + spacing * 2;
-    float halfwidth = rowwidth / 2.0f - base_keysize / 2.0f;
+    // 1. Separate "Edit" control window
+    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    if (ImGui::Button(g_edit_mode ? "Lock Position" : "Unlock to Move")) {
+        g_edit_mode = !g_edit_mode;
+    }
+    ImGui::End();
 
-    // Window style
-    ImGui::SetNextWindowBgAlpha(g_opacity);
-    ImGui::SetNextWindowPos(ImVec2(10, 90), ImGuiCond_FirstUseEver);
-
-    // Keystrokes Window (Moveable)
-    ImGui::Begin("Keystrokes", nullptr, 
-        ImGuiWindowFlags_NoTitleBar       | 
-        ImGuiWindowFlags_AlwaysAutoResize | 
-        ImGuiWindowFlags_NoScrollbar      | 
-        ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-    // Toggle settings on Right-Click/Long-Press
-    if (ImGui::IsWindowHovered() && ImGui::IsMouseReleased(1)) {
-        g_show_settings = !g_show_settings;
+    // 2. Keystrokes Window
+    ImGui::SetNextWindowPos(ImVec2(100, 100), ImGuiCond_FirstUseEver);
+    
+    ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar;
+    
+    if (!g_edit_mode) {
+        // Transparent and un-interactable when locked
+        flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs;
     }
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f * g_ui_scale);
+    ImGui::Begin("Keystrokes HUD", nullptr, flags);
 
-    // Layout
-    ImGui::InvisibleButton("##sp", ImVec2(halfwidth, base_keysize)); ImGui::SameLine();
-    drawkey("W", k.w, ImVec2(base_keysize, base_keysize));
-    
-    drawkey("A", k.a, ImVec2(base_keysize, base_keysize)); ImGui::SameLine();
-    drawkey("S", k.s, ImVec2(base_keysize, base_keysize)); ImGui::SameLine();
-    drawkey("D", k.d, ImVec2(base_keysize, base_keysize));
-    
-    drawkey("SPACE", k.space, ImVec2(rowwidth, base_keysize));
+    float keysize = 60.0f;
+    float spacing = 6.0f;
+    float rowwidth = keysize * 3 + spacing * 2;
+    float halfwidth = rowwidth / 2.0f - keysize / 2.0f;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+
+    ImGui::InvisibleButton("##sp", ImVec2(halfwidth, keysize)); ImGui::SameLine();
+    drawkey("W", k.w, ImVec2(keysize, keysize));
+    drawkey("A", k.a, ImVec2(keysize, keysize)); ImGui::SameLine();
+    drawkey("S", k.s, ImVec2(keysize, keysize)); ImGui::SameLine();
+    drawkey("D", k.d, ImVec2(keysize, keysize));
+    drawkey("SPACE", k.space, ImVec2(rowwidth, keysize));
     
     float halfrow = (rowwidth - spacing) / 2.0f;
-    drawkey("LMB", k.lmb, ImVec2(halfrow, base_keysize)); ImGui::SameLine();
-    drawkey("RMB", k.rmb, ImVec2(halfrow, base_keysize));
+    drawkey("LMB", k.lmb, ImVec2(halfrow, keysize)); ImGui::SameLine();
+    drawkey("RMB", k.rmb, ImVec2(halfrow, keysize));
 
     ImGui::PopStyleVar(2);
     ImGui::End();
-
-    // Settings Menu
-    if (g_show_settings) {
-        ImGui::Begin("Mod Settings", &g_show_settings, ImGuiWindowFlags_AlwaysAutoResize);
-        ImGui::Text("Configuration");
-        ImGui::Separator();
-        ImGui::SliderFloat("Opacity", &g_opacity, 0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Scale", &g_ui_scale, 0.5f, 3.0f, "%.1f");
-        if (ImGui::Button("Close")) g_show_settings = false;
-        ImGui::End();
-    }
 }
 
-// --- Setup & Main Loop ---
+// --- Standard Setup/Render/Init remains the same ---
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     ImGui::CreateContext();
@@ -223,16 +214,12 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     eglQuerySurface(dpy, surf, EGL_WIDTH, &w);
     eglQuerySurface(dpy, surf, EGL_HEIGHT, &h);
     if (w < 500 || h < 500) return orig_eglswapbuffers(dpy, surf);
-    
     if (g_targetcontext == EGL_NO_CONTEXT) {
-        g_targetcontext = ctx;
-        g_targetsurface = surf;
+        g_targetcontext = ctx; g_targetsurface = surf;
     }
-
     if (ctx == g_targetcontext && surf == g_targetsurface) {
         g_width = w; g_height = h;
-        setup();
-        render();
+        setup(); render();
     }
     return orig_eglswapbuffers(dpy, surf);
 }
@@ -243,11 +230,9 @@ static void* mainthread(void*) {
     GHandle hegl = GlossOpen("libEGL.so");
     void* swap = (void*)GlossSymbol(hegl, "eglSwapBuffers", nullptr);
     GlossHook(swap, (void*)hook_eglswapbuffers, (void**)&orig_eglswapbuffers);
-
     GHandle hlib = GlossOpen("libinput.so");
     void* symconsume = (void*)GlossSymbol(hlib, "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE", nullptr);
     if (symconsume) GlossHook(symconsume, (void*)hook_consume, (void**)&orig_consume);
-    
     return nullptr;
 }
 
