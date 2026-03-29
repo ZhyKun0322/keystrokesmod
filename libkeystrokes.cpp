@@ -9,6 +9,7 @@
 #include <mutex>
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
 
 #include "pl/Hook.h"
 #include "pl/Gloss.h"
@@ -45,7 +46,6 @@ static bool  g_showsettings = false;
 static ImVec2 g_hudpos      = ImVec2(100, 100);
 static bool  g_posloaded    = false;
 
-// Save file path (internal storage accessible by app)
 static const char* SAVE_PATH = "/data/data/com.mojang.minecraftpe/files/keystrokes.cfg";
 
 static void savecfg() {
@@ -161,69 +161,55 @@ static void drawkey(const char* label, bool pressed, ImVec2 size) {
     ImGui::PopStyleColor(4);
 }
 
-static void drawsettings(ImVec2 hudpos, float hudheight) {
-    float popupw = 280.0f;
-    float popuph = 200.0f;
+static void drawsettings(ImVec2 hudpos) {
+    float popupw = 400.0f; // Big configuration popup
+    float popuph = 280.0f;
 
-    // Position popup above HUD, clamp to screen
-    float px = hudpos.x;
-    float py = hudpos.y - popuph - 10.0f;
-    if (py < 0) py = hudpos.y + hudheight + 10.0f;
-    if (px + popupw > g_width) px = g_width - popupw - 10.0f;
-    if (px < 0) px = 10.0f;
-
-    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(hudpos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(popupw, popuph), ImGuiCond_Always);
+    
     ImGui::PushStyleColor(ImGuiCol_WindowBg,    ImVec4(0.08f, 0.08f, 0.08f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_SliderGrab,  ImVec4(0.3f,  0.8f,  0.6f,  1.0f));
     ImGui::PushStyleColor(ImGuiCol_FrameBg,     ImVec4(0.2f,  0.2f,  0.2f,  1.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(16, 14));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(8, 12));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(20, 18));
 
-    ImGui::Begin("##settings", nullptr,
-        ImGuiWindowFlags_NoTitleBar  |
-        ImGuiWindowFlags_NoResize    |
-        ImGuiWindowFlags_NoMove      |
-        ImGuiWindowFlags_NoScrollbar);
+    ImGui::Begin("##settings_popup", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar);
 
-    // Version label top right
-    ImGui::SetCursorPosX(popupw - 68);
-    ImGui::TextDisabled("v" VERSION);
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 4);
-
-    // Size slider
-    float sizeval = g_keysize;
-    ImGui::Text("Size: %.0fdp", sizeval);
-    ImGui::SetNextItemWidth(-1);
-    bool changed = false;
-    if (ImGui::SliderFloat("##size", &sizeval, 30.0f, 120.0f, "")) {
-        g_keysize = sizeval;
-        changed = true;
-    }
-
-    // Opacity slider
-    float opacityval = g_opacity * 100.0f;
-    ImGui::Text("Opacity: %.0f%%", opacityval);
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##opacity", &opacityval, 10.0f, 100.0f, "")) {
-        g_opacity = opacityval / 100.0f;
-        changed = true;
-    }
-
-    // Lock position row
+    ImGui::Text("Configuration");
     ImGui::Separator();
-    ImGui::Text("Lock Position");
-    ImGui::SameLine(popupw - 56);
-    bool prevlocked = g_locked;
-    if (ImGui::Checkbox("##lock", &g_locked) && g_locked != prevlocked)
-        changed = true;
-    ImGui::TextDisabled("Prevent dragging and accidental activation");
+    ImGui::Dummy(ImVec2(0, 5));
 
-    if (changed) savecfg();
+    // Size Slider
+    ImGui::Text("Size: %.0fpx", g_keysize);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("##size", &g_keysize, 30.0f, 150.0f, "")) savecfg();
+
+    ImGui::Dummy(ImVec2(0, 5));
+
+    // Opacity Slider
+    float op = g_opacity * 100.0f;
+    ImGui::Text("Opacity: %.0f%%", op);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("##opacity", &op, 10.0f, 100.0f, "")) {
+        g_opacity = op / 100.0f;
+        savecfg();
+    }
+
+    ImGui::Dummy(ImVec2(0, 5));
+
+    // Lock Position
+    ImGui::Checkbox("Lock Position", &g_locked);
+    
+    ImGui::Dummy(ImVec2(0, 10));
+    if (ImGui::Button("Close", ImVec2(-1, 45))) {
+        g_showsettings = false;
+        savecfg();
+    }
 
     ImGui::End();
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);
 }
 
@@ -234,75 +220,65 @@ static void drawmenu() {
         k = g_keys;
     }
 
-    ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar    |
-                             ImGuiWindowFlags_NoBackground  |
-                             ImGuiWindowFlags_AlwaysAutoResize |
-                             ImGuiWindowFlags_NoScrollbar   |
-                             ImGuiWindowFlags_NoMove;
+    float ks      = g_keysize;
+    float spacing = ks * 0.1f;
+    float hud_w   = ks * 3 + spacing * 2;
+    float hud_h   = ks * 4 + spacing * 3; 
 
-    ImGui::Begin("Keystrokes HUD", nullptr, flags);
+    ImGuiIO& io = ImGui::GetIO();
+    
+    // Check if mouse is within the invisible interaction box
+    bool hovered = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hud_w &&
+                    io.MousePos.y >= g_hudpos.y && io.MousePos.y <= g_hudpos.y + hud_h);
 
-    float ks       = g_keysize;
-    float spacing  = ks * 0.1f;
-    float rowwidth = ks * 3 + spacing * 2;
-
-    ImGuiIO& io   = ImGui::GetIO();
-    bool hovered  = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-    bool mousedown = io.MouseDown[0];
-
-    // Long press detection
-    if (hovered && mousedown && !g_pressing) {
-        g_pressing   = true;
+    // Long press and drag logic for the "Invisible Box"
+    if (hovered && io.MouseDown[0] && !g_pressing) {
+        g_pressing = true;
         g_pressstart = nowsec();
     }
-    if (!mousedown) g_pressing = false;
+    if (!io.MouseDown[0]) g_pressing = false;
+
     if (g_pressing && (nowsec() - g_pressstart) >= LONGPRESS_SEC) {
         g_showsettings = !g_showsettings;
-        g_pressing     = false;
+        g_pressing = false;
         savecfg();
     }
 
-    // Drag (only when not locked and settings closed)
-    if (!g_locked && !g_showsettings && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        ImVec2 delta = io.MouseDelta;
-        g_hudpos.x += delta.x;
-        g_hudpos.y += delta.y;
+    if (!g_locked && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        g_hudpos.x += io.MouseDelta.x;
+        g_hudpos.y += io.MouseDelta.y;
+        
         // Clamp to screen
-        g_hudpos.x = fmaxf(0.0f, fminf(g_hudpos.x, (float)g_width  - rowwidth - 20.0f));
-        g_hudpos.y = fmaxf(0.0f, fminf(g_hudpos.y, (float)g_height - ks * 4.0f - 40.0f));
-        ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
+        g_hudpos.x = std::max(0.0f, std::min(g_hudpos.x, (float)g_width - hud_w));
+        g_hudpos.y = std::max(0.0f, std::min(g_hudpos.y, (float)g_height - hud_h));
         savecfg();
     }
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+    if (g_showsettings) {
+        drawsettings(g_hudpos);
+    } else {
+        ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
+        ImGui::Begin("Keystrokes HUD", nullptr, 
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground | 
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs);
 
-    // Row 1: W centered
-    ImGui::SetCursorPosX(ks + spacing * 1.5f);
-    drawkey("W", k.w, ImVec2(ks, ks));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    // Row 2: A S D
-    drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
-    drawkey("S", k.s, ImVec2(ks, ks)); ImGui::SameLine();
-    drawkey("D", k.d, ImVec2(ks, ks));
+        ImGui::SetCursorPosX(ks + spacing * 1.5f);
+        drawkey("W", k.w, ImVec2(ks, ks));
+        drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
+        drawkey("S", k.s, ImVec2(ks, ks)); ImGui::SameLine();
+        drawkey("D", k.d, ImVec2(ks, ks));
+        drawkey("SPACE", k.space, ImVec2(hud_w, ks));
 
-    // Row 3: SPACE
-    drawkey("SPACE", k.space, ImVec2(rowwidth, ks));
+        float half = (hud_w - spacing) / 2.0f;
+        drawkey("LMB", k.lmb, ImVec2(half, ks)); ImGui::SameLine();
+        drawkey("RMB", k.rmb, ImVec2(half, ks));
 
-    // Row 4: LMB RMB
-    float halfrow = (rowwidth - spacing) / 2.0f;
-    drawkey("LMB", k.lmb, ImVec2(halfrow, ks)); ImGui::SameLine();
-    drawkey("RMB", k.rmb, ImVec2(halfrow, ks));
-
-    ImGui::PopStyleVar(2);
-
-    // Capture window height for settings popup positioning
-    float winheight = ImGui::GetWindowHeight();
-    ImGui::End();
-
-    if (g_showsettings)
-        drawsettings(g_hudpos, winheight);
+        ImGui::PopStyleVar(2);
+        ImGui::End();
+    }
 }
 
 // ─── ImGui init & render ─────────────────────────────────────────────────────
