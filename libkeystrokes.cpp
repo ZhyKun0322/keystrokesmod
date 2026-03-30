@@ -82,64 +82,22 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
     if (result == 0 && outEvent && *outEvent) {
         AInputEvent* event = *outEvent;
         if (g_initialized) ImGui_ImplAndroid_HandleInputEvent(event);
-        
         int32_t type = AInputEvent_getType(event);
-        int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
         
         std::lock_guard<std::mutex> lock(g_keymutex);
-
         if (type == AINPUT_EVENT_TYPE_MOTION) {
-            size_t pointerCount = AMotionEvent_getPointerCount(event);
-            
-            bool touchW = false, touchA = false, touchS = false, touchD = false;
-            bool touchSpace = false, touchLMB = false, touchRMB = false;
-
-            for (size_t i = 0; i < pointerCount; i++) {
-                float x = AMotionEvent_getX(event, i);
-                float y = AMotionEvent_getY(event, i);
-
-                // --- LEFT SIDE: MOVEMENT (D-PAD & JOYSTICK HYBRID) ---
-                if (x < g_width * 0.45f && y > g_height * 0.45f) {
-                    float centerX = g_width * 0.18f; 
-                    float centerY = g_height * 0.78f;
-                    float deadzone = 45.0f; 
-
-                    if (y < centerY - deadzone) touchW = true;
-                    if (y > centerY + deadzone) touchS = true;
-                    if (x < centerX - deadzone) touchA = true;
-                    if (x > centerX + deadzone) touchD = true;
-                }
-
-                // --- RIGHT SIDE: ACTIONS (NEW & OLD CONTROLS) ---
-                if (x > g_width * 0.60f) {
-                    // SPACE/JUMP: Adjusted Y-range to catch the high button in New Controls
-                    if (y > g_height * 0.30f && y < g_height * 0.65f) {
-                        touchSpace = true;
-                    }
-                    // ATTACK & INTERACT: Lower right section
-                    else if (y >= g_height * 0.65f) {
-                        if (x < g_width * 0.88f) touchLMB = true;
-                        else touchRMB = true;
-                    }
-                }
-            }
-
-            if (action != AMOTION_EVENT_ACTION_UP && action != AMOTION_EVENT_ACTION_CANCEL) {
-                g_keys.w = touchW; g_keys.a = touchA; g_keys.s = touchS; g_keys.d = touchD;
-                g_keys.space = touchSpace; g_keys.lmb = touchLMB; g_keys.rmb = touchRMB;
-            } else {
-                g_keys = {false, false, false, false, false, false, false};
-            }
-        } 
-        else if (type == AINPUT_EVENT_TYPE_KEY) {
-            int32_t kAction = AKeyEvent_getAction(event);
-            int32_t kCode = AKeyEvent_getKeyCode(event);
-            bool isPressed = (kAction == AKEY_EVENT_ACTION_DOWN);
-            switch (kCode) {
-                case AKEYCODE_W: g_keys.w = isPressed; break;
-                case AKEYCODE_A: g_keys.a = isPressed; break;
-                case AKEYCODE_S: g_keys.s = isPressed; break;
-                case AKEYCODE_D: g_keys.d = isPressed; break;
+            int32_t btnstate = AMotionEvent_getButtonState(event);
+            g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
+            g_keys.rmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
+        } else if (type == AINPUT_EVENT_TYPE_KEY) {
+            int32_t action  = AKeyEvent_getAction(event);
+            int32_t keycode = AKeyEvent_getKeyCode(event);
+            bool isPressed  = (action == AKEY_EVENT_ACTION_DOWN);
+            switch (keycode) {
+                case AKEYCODE_W:     g_keys.w     = isPressed; break;
+                case AKEYCODE_A:     g_keys.a     = isPressed; break;
+                case AKEYCODE_S:     g_keys.s     = isPressed; break;
+                case AKEYCODE_D:     g_keys.d     = isPressed; break;
                 case AKEYCODE_SPACE: g_keys.space = isPressed; break;
             }
         }
