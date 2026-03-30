@@ -17,7 +17,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
-#define VERSION "1.0.5"
+#define VERSION "1.0.6"
 
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
@@ -35,6 +35,7 @@ static std::mutex g_keymutex;
 
 static bool g_initialized = false;
 static int g_width = 0, g_height = 0;
+static float g_dpi = 160.0f;
 static EGLContext g_targetcontext = EGL_NO_CONTEXT;
 static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 
@@ -46,6 +47,18 @@ static ImVec2 g_hudpos      = ImVec2(100, 100);
 static bool  g_posloaded    = false;
 
 static const char* SAVE_PATH = "/data/data/com.mojang.minecraftpe/files/keystrokes.cfg";
+
+static bool g_usenewconsume = false;
+
+static const char* consume_syms[] = {
+    "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventEb",
+    "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE",
+    nullptr
+};
+
+static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
+static int32_t (*orig_consume)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
+static int32_t (*orig_consume_new)(void*, void*, bool, long, uint32_t*, AInputEvent**, bool) = nullptr;
 
 static void savecfg() {
     FILE* f = fopen(SAVE_PATH, "w");
@@ -70,38 +83,44 @@ static double nowsec() {
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
-static bool   g_pressing    = false;
-static double g_pressstart  = 0.0;
+static bool   g_pressing   = false;
+static double g_pressstart = 0.0;
 static const double LONGPRESS_SEC = 0.5;
 
-static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
-static int32_t (*orig_consume)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
+static void processinput(AInputEvent* event) {
+    if (g_initialized) ImGui_ImplAndroid_HandleInputEvent(event);
+    int32_t type = AInputEvent_getType(event);
+
+    std::lock_guard<std::mutex> lock(g_keymutex);
+    if (type == AINPUT_EVENT_TYPE_MOTION) {
+        int32_t btnstate = AMotionEvent_getButtonState(event);
+        g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
+        g_keys.rmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
+    } else if (type == AINPUT_EVENT_TYPE_KEY) {
+        int32_t action  = AKeyEvent_getAction(event);
+        int32_t keycode = AKeyEvent_getKeyCode(event);
+        bool isPressed  = (action == AKEY_EVENT_ACTION_DOWN);
+        switch (keycode) {
+            case AKEYCODE_W:     g_keys.w     = isPressed; break;
+            case AKEYCODE_A:     g_keys.a     = isPressed; break;
+            case AKEYCODE_S:     g_keys.s     = isPressed; break;
+            case AKEYCODE_D:     g_keys.d     = isPressed; break;
+            case AKEYCODE_SPACE: g_keys.space = isPressed; break;
+        }
+    }
+}
 
 static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent) {
     int32_t result = orig_consume ? orig_consume(thiz, a1, a2, a3, a4, outEvent) : 0;
-    if (result == 0 && outEvent && *outEvent) {
-        AInputEvent* event = *outEvent;
-        if (g_initialized) ImGui_ImplAndroid_HandleInputEvent(event);
-        int32_t type = AInputEvent_getType(event);
-        
-        std::lock_guard<std::mutex> lock(g_keymutex);
-        if (type == AINPUT_EVENT_TYPE_MOTION) {
-            int32_t btnstate = AMotionEvent_getButtonState(event);
-            g_keys.lmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
-            g_keys.rmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
-        } else if (type == AINPUT_EVENT_TYPE_KEY) {
-            int32_t action  = AKeyEvent_getAction(event);
-            int32_t keycode = AKeyEvent_getKeyCode(event);
-            bool isPressed  = (action == AKEY_EVENT_ACTION_DOWN);
-            switch (keycode) {
-                case AKEYCODE_W:     g_keys.w     = isPressed; break;
-                case AKEYCODE_A:     g_keys.a     = isPressed; break;
-                case AKEYCODE_S:     g_keys.s     = isPressed; break;
-                case AKEYCODE_D:     g_keys.d     = isPressed; break;
-                case AKEYCODE_SPACE: g_keys.space = isPressed; break;
-            }
-        }
-    }
+    if (result == 0 && outEvent && *outEvent)
+        processinput(*outEvent);
+    return result;
+}
+
+static int32_t hook_consume_new(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent, bool a6) {
+    int32_t result = orig_consume_new ? orig_consume_new(thiz, a1, a2, a3, a4, outEvent, a6) : 0;
+    if (result == 0 && outEvent && *outEvent)
+        processinput(*outEvent);
     return result;
 }
 
@@ -135,23 +154,23 @@ static void restoregl(const glstate& s) {
 
 static void drawkey(const char* label, bool pressed, ImVec2 size) {
     float a = g_opacity;
-    ImVec4 color = pressed ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f*a) : ImVec4(0.15f, 0.15f, 0.15f, 0.7f*a);
-    ImVec4 textcolor = pressed ? ImVec4(0.0f, 0.0f, 0.0f, a) : ImVec4(1.0f, 1.0f, 1.0f, a);
-    ImGui::PushStyleColor(ImGuiCol_Button, color);
+    ImVec4 color     = pressed ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f*a) : ImVec4(0.15f, 0.15f, 0.15f, 0.7f*a);
+    ImVec4 textcolor = pressed ? ImVec4(0.0f, 0.0f, 0.0f, a)       : ImVec4(1.0f,  1.0f,  1.0f,  a);
+    ImGui::PushStyleColor(ImGuiCol_Button,        color);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, color);
-    ImGui::PushStyleColor(ImGuiCol_Text, textcolor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  color);
+    ImGui::PushStyleColor(ImGuiCol_Text,          textcolor);
     ImGui::Button(label, size);
     ImGui::PopStyleColor(4);
 }
 
 static void drawsettings(ImVec2 hudpos) {
-    float confW = 480.0f; 
-    float confH = 380.0f; 
+    float confW = 480.0f;
+    float confH = 380.0f;
 
     ImGui::SetNextWindowPos(hudpos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(confW, confH), ImGuiCond_Always);
-    
+
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.08f, 0.98f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(25, 25));
@@ -181,12 +200,13 @@ static void drawsettings(ImVec2 hudpos) {
     if (ImGui::Checkbox("Lock HUD Position", &g_locked)) savecfg();
     ImGui::PopStyleVar();
 
-    ImGui::Dummy(ImVec2(0, 60)); 
+    ImGui::Dummy(ImVec2(0, 60));
     ImGui::EndChild();
 
-    if (ImGui::IsMouseClicked(0) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive()) {
+    if (ImGui::IsMouseClicked(0) &&
+        !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
+        !ImGui::IsAnyItemActive())
         g_showsettings = false;
-    }
 
     ImGui::End();
     ImGui::PopStyleVar(2);
@@ -197,24 +217,24 @@ static void drawmenu() {
     KeyState k;
     { std::lock_guard<std::mutex> lock(g_keymutex); k = g_keys; }
 
-    float ks = g_keysize;
+    float ks      = g_keysize;
     float spacing = ks * 0.12f;
-    float hudW = ks * 3 + spacing * 2;
-    float hudH = ks * 4 + spacing * 3;
+    float hudW    = ks * 3 + spacing * 2;
+    float hudH    = ks * 4 + spacing * 3;
 
     ImGuiIO& io = ImGui::GetIO();
     bool isInside = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hudW &&
                      io.MousePos.y >= g_hudpos.y && io.MousePos.y <= g_hudpos.y + hudH);
 
     if (isInside && io.MouseDown[0] && !g_pressing && !g_showsettings) {
-        g_pressing = true;
+        g_pressing   = true;
         g_pressstart = nowsec();
     }
     if (!io.MouseDown[0]) g_pressing = false;
 
     if (g_pressing && (nowsec() - g_pressstart) >= LONGPRESS_SEC) {
         g_showsettings = true;
-        g_pressing = false;
+        g_pressing     = false;
     }
 
     if (!g_locked && !g_showsettings && isInside && ImGui::IsMouseDragging(0)) {
@@ -227,10 +247,12 @@ static void drawmenu() {
         drawsettings(g_hudpos);
     } else {
         ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
-        ImGui::Begin("Keystrokes", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground | 
-                                           ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs);
+        ImGui::Begin("Keystrokes", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground |
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoInputs);
 
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
 
         ImGui::SetCursorPosX(ks + spacing * 1.5f);
@@ -255,23 +277,32 @@ static void setup() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    
-    float scale = (float)g_height / 720.0f;
-    if (g_width > 2000) scale *= 1.25f; 
-    else if (scale < 1.5f) scale = 1.5f;
-    
-    ImFontConfig cfg; cfg.SizePixels = 30.0f * scale;
+
+    int minside = std::min(g_width, g_height);
+    int maxside = std::max(g_width, g_height);
+
+    float dpscale = (float)minside / 360.0f;
+    dpscale = std::max(1.0f, std::min(dpscale, 4.0f));
+    if (maxside > 2560) dpscale *= 1.2f;
+    dpscale = std::min(dpscale, 4.0f);
+
+    float fontsize = std::max(16.0f, 26.0f * dpscale);
+
+    ImFontConfig cfg;
+    cfg.SizePixels = fontsize;
     io.Fonts->AddFontDefault(&cfg);
+
     ImGui_ImplAndroid_Init();
     ImGui_ImplOpenGL3_Init("#version 300 es");
-    ImGui::GetStyle().ScaleAllSizes(scale);
+    ImGui::GetStyle().ScaleAllSizes(dpscale);
+
     g_initialized = true;
 }
 
 static void render() {
     if (!g_initialized) return;
     glstate s; savegl(s);
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO& io    = ImGui::GetIO();
     io.DisplaySize = ImVec2((float)g_width, (float)g_height);
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplAndroid_NewFrame(g_width, g_height);
@@ -286,7 +317,7 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     EGLContext ctx = eglGetCurrentContext();
     if (ctx == EGL_NO_CONTEXT) return orig_eglswapbuffers(dpy, surf);
     EGLint w = 0, h = 0;
-    eglQuerySurface(dpy, surf, EGL_WIDTH, &w);
+    eglQuerySurface(dpy, surf, EGL_WIDTH,  &w);
     eglQuerySurface(dpy, surf, EGL_HEIGHT, &h);
     if (w < 500 || h < 500) return orig_eglswapbuffers(dpy, surf);
     if (g_targetcontext == EGL_NO_CONTEXT) { g_targetcontext = ctx; g_targetsurface = surf; }
@@ -295,18 +326,40 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
 }
 
 static void* mainthread(void*) {
-    sleep(3);
+    sleep(5);
+
     GlossInit(true);
+
     GHandle hegl = GlossOpen("libEGL.so");
-    void* swap = (void*)GlossSymbol(hegl, "eglSwapBuffers", nullptr);
-    GlossHook(swap, (void*)hook_eglswapbuffers, (void**)&orig_eglswapbuffers);
-    GHandle hlib = GlossOpen("libinput.so");
-    void* symconsume = (void*)GlossSymbol(hlib, "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE", nullptr);
-    if (symconsume) GlossHook(symconsume, (void*)hook_consume, (void**)&orig_consume);
+    void* swap   = (void*)GlossSymbol(hegl, "eglSwapBuffers", nullptr);
+    if (!swap) {
+        GHandle hgles = GlossOpen("libGLESv2.so");
+        swap = (void*)GlossSymbol(hgles, "eglSwapBuffers", nullptr);
+    }
+    if (swap) GlossHook(swap, (void*)hook_eglswapbuffers, (void**)&orig_eglswapbuffers);
+
+    GHandle hlib     = GlossOpen("libinput.so");
+    void* symconsume = nullptr;
+    for (int i = 0; consume_syms[i]; i++) {
+        symconsume = (void*)GlossSymbol(hlib, consume_syms[i], nullptr);
+        if (symconsume) {
+            g_usenewconsume = (i == 0);
+            break;
+        }
+    }
+
+    if (symconsume) {
+        if (g_usenewconsume)
+            GlossHook(symconsume, (void*)hook_consume_new, (void**)&orig_consume_new);
+        else
+            GlossHook(symconsume, (void*)hook_consume,     (void**)&orig_consume);
+    }
+
     return nullptr;
 }
 
 __attribute__((constructor))
 void keystrokes_init() {
-    pthread_t t; pthread_create(&t, nullptr, mainthread, nullptr);
+    pthread_t t;
+    pthread_create(&t, nullptr, mainthread, nullptr);
 }
