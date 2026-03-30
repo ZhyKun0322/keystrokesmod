@@ -84,14 +84,13 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
         if (g_initialized) ImGui_ImplAndroid_HandleInputEvent(event);
         
         int32_t type = AInputEvent_getType(event);
-        int32_t source = AInputEvent_getSource(event);
+        int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
         
         std::lock_guard<std::mutex> lock(g_keymutex);
 
         if (type == AINPUT_EVENT_TYPE_MOTION) {
-            int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
             size_t pointerCount = AMotionEvent_getPointerCount(event);
-
+            
             bool touchW = false, touchA = false, touchS = false, touchD = false;
             bool touchSpace = false, touchLMB = false, touchRMB = false;
 
@@ -99,17 +98,29 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
                 float x = AMotionEvent_getX(event, i);
                 float y = AMotionEvent_getY(event, i);
 
-                if (x < g_width * 0.4f && y > g_height * 0.5f) {
-                    if (y < g_height * 0.75f) touchW = true;
-                    else if (y > g_height * 0.85f) touchS = true;
-                    if (x < g_width * 0.1f) touchA = true;
-                    else if (x > g_width * 0.2f && x < g_width * 0.4f) touchD = true;
+                // --- LEFT SIDE: MOVEMENT (D-PAD & JOYSTICK HYBRID) ---
+                if (x < g_width * 0.45f && y > g_height * 0.45f) {
+                    float centerX = g_width * 0.18f; 
+                    float centerY = g_height * 0.78f;
+                    float deadzone = 45.0f; 
+
+                    if (y < centerY - deadzone) touchW = true;
+                    if (y > centerY + deadzone) touchS = true;
+                    if (x < centerX - deadzone) touchA = true;
+                    if (x > centerX + deadzone) touchD = true;
                 }
 
-                if (x > g_width * 0.7f) {
-                    if (y > g_height * 0.7f) touchSpace = true;
-                    if (y < g_height * 0.6f) touchLMB = true;
-                    if (y > g_height * 0.4f && y < g_height * 0.6f && x > g_width * 0.85f) touchRMB = true;
+                // --- RIGHT SIDE: ACTIONS (NEW & OLD CONTROLS) ---
+                if (x > g_width * 0.60f) {
+                    // SPACE/JUMP: Adjusted Y-range to catch the high button in New Controls
+                    if (y > g_height * 0.30f && y < g_height * 0.65f) {
+                        touchSpace = true;
+                    }
+                    // ATTACK & INTERACT: Lower right section
+                    else if (y >= g_height * 0.65f) {
+                        if (x < g_width * 0.88f) touchLMB = true;
+                        else touchRMB = true;
+                    }
                 }
             }
 
@@ -119,15 +130,16 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
             } else {
                 g_keys = {false, false, false, false, false, false, false};
             }
-        } else if (type == AINPUT_EVENT_TYPE_KEY) {
-            int32_t action  = AKeyEvent_getAction(event);
-            int32_t keycode = AKeyEvent_getKeyCode(event);
-            bool isPressed  = (action == AKEY_EVENT_ACTION_DOWN);
-            switch (keycode) {
-                case AKEYCODE_W:     g_keys.w     = isPressed; break;
-                case AKEYCODE_A:     g_keys.a     = isPressed; break;
-                case AKEYCODE_S:     g_keys.s     = isPressed; break;
-                case AKEYCODE_D:     g_keys.d     = isPressed; break;
+        } 
+        else if (type == AINPUT_EVENT_TYPE_KEY) {
+            int32_t kAction = AKeyEvent_getAction(event);
+            int32_t kCode = AKeyEvent_getKeyCode(event);
+            bool isPressed = (kAction == AKEY_EVENT_ACTION_DOWN);
+            switch (kCode) {
+                case AKEYCODE_W: g_keys.w = isPressed; break;
+                case AKEYCODE_A: g_keys.a = isPressed; break;
+                case AKEYCODE_S: g_keys.s = isPressed; break;
+                case AKEYCODE_D: g_keys.d = isPressed; break;
                 case AKEYCODE_SPACE: g_keys.space = isPressed; break;
             }
         }
