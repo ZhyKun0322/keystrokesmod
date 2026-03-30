@@ -35,11 +35,11 @@ static std::mutex g_keymutex;
 
 static bool g_initialized = false;
 static int g_width = 0, g_height = 0;
-static float g_dpi = 160.0f;
+static float g_uiscale = 1.0f;
 static EGLContext g_targetcontext = EGL_NO_CONTEXT;
 static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 
-static float g_keysize      = 70.0f;
+static float g_keysize      = 50.0f;
 static float g_opacity      = 1.0f;
 static bool  g_locked       = false;
 static bool  g_showsettings = false;
@@ -165,52 +165,84 @@ static void drawkey(const char* label, bool pressed, ImVec2 size) {
 }
 
 static void drawsettings(ImVec2 hudpos) {
-    float confW = 480.0f;
-    float confH = 380.0f;
+    float sw = g_width  * 0.22f;
+    float sh = g_height * 0.38f;
+    sw = std::max(sw, 200.0f);
+    sh = std::max(sh, 180.0f);
 
-    ImGui::SetNextWindowPos(hudpos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(confW, confH), ImGuiCond_Always);
+    float px = hudpos.x + g_keysize * 3.0f + g_keysize * 0.12f * 2 + 8.0f;
+    float py = hudpos.y;
+    if (px + sw > g_width)  px = hudpos.x - sw - 8.0f;
+    if (py + sh > g_height) py = g_height - sh - 8.0f;
+    if (px < 0) px = 8.0f;
+    if (py < 0) py = 8.0f;
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.08f, 0.98f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(25, 25));
+    ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(sw, sh), ImGuiCond_Always);
 
-    ImGui::Begin("##config", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
-    ImGui::BeginChild("##scroll", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,       ImVec4(0.10f, 0.10f, 0.10f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0.20f, 0.20f, 0.20f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.28f, 0.28f, 0.28f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab,     ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.35f, 1.00f, 0.60f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark,      ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(10.0f, 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(6.0f, 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,   ImVec2(6.0f, 4.0f));
 
-    ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "HUD CONFIGURATION");
+    ImGui::Begin("##cfg", nullptr,
+        ImGuiWindowFlags_NoTitleBar  |
+        ImGuiWindowFlags_NoResize    |
+        ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoMove);
+
+    float labelw = sw * 0.52f;
+    float ctrlw  = sw - labelw - 20.0f;
+
+    ImGui::TextColored(ImVec4(0.55f, 0.55f, 0.55f, 1.0f), "KEYSTROKES");
     ImGui::Separator();
-    ImGui::Dummy(ImVec2(0, 15));
+    ImGui::Spacing();
 
-    ImGui::Text("Size: %.0f px", g_keysize);
+    ImGui::Text("Size: %.0fdp", g_keysize);
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##size", &g_keysize, 40.0f, 200.0f, "")) savecfg();
-    ImGui::Dummy(ImVec2(0, 20));
+    if (ImGui::SliderFloat("##sz", &g_keysize, 30.0f, 120.0f, "")) savecfg();
+
+    ImGui::Spacing();
 
     float op = g_opacity * 100.0f;
     ImGui::Text("Opacity: %.0f%%", op);
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##opacity", &op, 10.0f, 100.0f, "")) {
+    if (ImGui::SliderFloat("##op", &op, 10.0f, 100.0f, "")) {
         g_opacity = op / 100.0f;
         savecfg();
     }
-    ImGui::Dummy(ImVec2(0, 20));
 
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
-    if (ImGui::Checkbox("Lock HUD Position", &g_locked)) savecfg();
-    ImGui::PopStyleVar();
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
 
-    ImGui::Dummy(ImVec2(0, 60));
-    ImGui::EndChild();
+    ImGui::Columns(2, "##lkcol", false);
+    ImGui::SetColumnWidth(0, labelw);
+    ImGui::Text("Lock Position");
+    ImGui::NextColumn();
+    ImGui::SetNextItemWidth(ctrlw);
+    if (ImGui::Checkbox("##lk", &g_locked)) savecfg();
+    ImGui::Columns(1);
 
-    if (ImGui::IsMouseClicked(0) &&
-        !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
-        !ImGui::IsAnyItemActive())
-        g_showsettings = false;
+    ImGui::Spacing();
+    ImGui::TextDisabled("Prevent dragging and");
+    ImGui::TextDisabled("accidental activation");
 
     ImGui::End();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(1);
+    ImGui::PopStyleVar(4);
+    ImGui::PopStyleColor(6);
+
+    ImGuiIO& io = ImGui::GetIO();
+    bool outsideclick = ImGui::IsMouseClicked(0) &&
+        (io.MousePos.x < px || io.MousePos.x > px + sw ||
+         io.MousePos.y < py || io.MousePos.y > py + sh);
+    if (outsideclick) g_showsettings = false;
 }
 
 static void drawmenu() {
@@ -243,32 +275,32 @@ static void drawmenu() {
         savecfg();
     }
 
-    if (g_showsettings) {
-        drawsettings(g_hudpos);
-    } else {
-        ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
-        ImGui::Begin("Keystrokes", nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground |
-            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoInputs);
+    if (g_showsettings) drawsettings(g_hudpos);
 
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
+    ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
+    ImGui::Begin("##ks", nullptr,
+        ImGuiWindowFlags_NoTitleBar      |
+        ImGuiWindowFlags_NoBackground    |
+        ImGuiWindowFlags_AlwaysAutoResize|
+        ImGuiWindowFlags_NoMove          |
+        ImGuiWindowFlags_NoInputs);
 
-        ImGui::SetCursorPosX(ks + spacing * 1.5f);
-        drawkey("W", k.w, ImVec2(ks, ks));
-        drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
-        drawkey("S", k.s, ImVec2(ks, ks)); ImGui::SameLine();
-        drawkey("D", k.d, ImVec2(ks, ks));
-        drawkey("SPACE", k.space, ImVec2(hudW, ks * 0.8f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-        float half = (hudW - spacing) / 2.0f;
-        drawkey("LMB", k.lmb, ImVec2(half, ks * 0.8f)); ImGui::SameLine();
-        drawkey("RMB", k.rmb, ImVec2(half, ks * 0.8f));
+    ImGui::SetCursorPosX(ks + spacing * 1.5f);
+    drawkey("W", k.w, ImVec2(ks, ks));
+    drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
+    drawkey("S", k.s, ImVec2(ks, ks)); ImGui::SameLine();
+    drawkey("D", k.d, ImVec2(ks, ks));
+    drawkey("SPACE", k.space, ImVec2(hudW, ks * 0.7f));
 
-        ImGui::PopStyleVar(2);
-        ImGui::End();
-    }
+    float half = (hudW - spacing) / 2.0f;
+    drawkey("LMB", k.lmb, ImVec2(half, ks * 0.7f)); ImGui::SameLine();
+    drawkey("RMB", k.rmb, ImVec2(half, ks * 0.7f));
+
+    ImGui::PopStyleVar(2);
+    ImGui::End();
 }
 
 static void setup() {
@@ -279,14 +311,14 @@ static void setup() {
     io.IniFilename = nullptr;
 
     int minside = std::min(g_width, g_height);
-    int maxside = std::max(g_width, g_height);
 
-    float dpscale = (float)minside / 360.0f;
-    dpscale = std::max(1.0f, std::min(dpscale, 4.0f));
-    if (maxside > 2560) dpscale *= 1.2f;
-    dpscale = std::min(dpscale, 4.0f);
+    // Scale anchored to 480p as baseline — keeps HUD small and sane
+    // across all screen sizes including high DPI devices
+    float dpscale = (float)minside / 480.0f;
+    dpscale = std::max(0.8f, std::min(dpscale, 2.5f));
+    g_uiscale = dpscale;
 
-    float fontsize = std::max(16.0f, 26.0f * dpscale);
+    float fontsize = std::max(13.0f, 14.0f * dpscale);
 
     ImFontConfig cfg;
     cfg.SizePixels = fontsize;
@@ -294,7 +326,10 @@ static void setup() {
 
     ImGui_ImplAndroid_Init();
     ImGui_ImplOpenGL3_Init("#version 300 es");
-    ImGui::GetStyle().ScaleAllSizes(dpscale);
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ScaleAllSizes(dpscale);
+    style.WindowBorderSize = 0.0f;
 
     g_initialized = true;
 }
