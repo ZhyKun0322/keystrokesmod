@@ -17,7 +17,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
-#define VERSION "1.0.3"
+#define VERSION "1.0.5"
 
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
@@ -38,7 +38,6 @@ static int g_width = 0, g_height = 0;
 static EGLContext g_targetcontext = EGL_NO_CONTEXT;
 static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 
-// ─── Settings ────────────────────────────────────────────────────────────────
 static float g_keysize      = 70.0f;
 static float g_opacity      = 1.0f;
 static bool  g_locked       = false;
@@ -71,7 +70,6 @@ static double nowsec() {
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
-// ─── Interaction State ───────────────────────────────────────────────────────
 static bool   g_pressing    = false;
 static double g_pressstart  = 0.0;
 static const double LONGPRESS_SEC = 0.5;
@@ -85,6 +83,7 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
         AInputEvent* event = *outEvent;
         if (g_initialized) ImGui_ImplAndroid_HandleInputEvent(event);
         int32_t type = AInputEvent_getType(event);
+        
         std::lock_guard<std::mutex> lock(g_keymutex);
         if (type == AINPUT_EVENT_TYPE_MOTION) {
             int32_t btnstate = AMotionEvent_getButtonState(event);
@@ -106,11 +105,11 @@ static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4
     return result;
 }
 
-// ─── GL State Save/Restore ───────────────────────────────────────────────────
 struct glstate {
     GLint prog, tex, atex, abuf, ebuf, vao, fbo, vp[4], sc[4], bsrc, bdst;
     GLboolean blend, cull, depth, scissor;
 };
+
 static void savegl(glstate& s) {
     glGetIntegerv(GL_CURRENT_PROGRAM, &s.prog); glGetIntegerv(GL_TEXTURE_BINDING_2D, &s.tex);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &s.atex); glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &s.abuf);
@@ -121,6 +120,7 @@ static void savegl(glstate& s) {
     s.blend = glIsEnabled(GL_BLEND); s.cull = glIsEnabled(GL_CULL_FACE);
     s.depth = glIsEnabled(GL_DEPTH_TEST); s.scissor = glIsEnabled(GL_SCISSOR_TEST);
 }
+
 static void restoregl(const glstate& s) {
     glUseProgram(s.prog); glActiveTexture(s.atex); glBindTexture(GL_TEXTURE_2D, s.tex);
     glBindBuffer(GL_ARRAY_BUFFER, s.abuf); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.ebuf);
@@ -132,8 +132,6 @@ static void restoregl(const glstate& s) {
     s.depth ? glEnable(GL_DEPTH_TEST) : glDisable(GL_DEPTH_TEST);
     s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
 }
-
-// ─── UI Rendering ────────────────────────────────────────────────────────────
 
 static void drawkey(const char* label, bool pressed, ImVec2 size) {
     float a = g_opacity;
@@ -159,21 +157,17 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(25, 25));
 
     ImGui::Begin("##config", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
-
-    // Scrollable area
     ImGui::BeginChild("##scroll", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
     ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "HUD CONFIGURATION");
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 15));
 
-    // 1. DPI / Size
-    ImGui::Text("Size (DPI): %.0f px", g_keysize);
+    ImGui::Text("Size: %.0f px", g_keysize);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::SliderFloat("##size", &g_keysize, 40.0f, 200.0f, "")) savecfg();
     ImGui::Dummy(ImVec2(0, 20));
 
-    // 2. Opacity
     float op = g_opacity * 100.0f;
     ImGui::Text("Opacity: %.0f%%", op);
     ImGui::SetNextItemWidth(-1);
@@ -183,18 +177,13 @@ static void drawsettings(ImVec2 hudpos) {
     }
     ImGui::Dummy(ImVec2(0, 20));
 
-    // 3. Lock Position
-    // Increased size for mobile touch
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
     if (ImGui::Checkbox("Lock HUD Position", &g_locked)) savecfg();
     ImGui::PopStyleVar();
 
-    ImGui::Dummy(ImVec2(0, 60)); // Scroll buffer
+    ImGui::Dummy(ImVec2(0, 60)); 
     ImGui::EndChild();
 
-    // ─── IMPROVED CLOSE LOGIC ───
-    // We check if the mouse is clicked AND that NO items are currently being touched/active.
-    // This prevents the menu from closing when you click the checkbox or drag a slider.
     if (ImGui::IsMouseClicked(0) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive()) {
         g_showsettings = false;
     }
@@ -217,7 +206,6 @@ static void drawmenu() {
     bool isInside = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hudW &&
                      io.MousePos.y >= g_hudpos.y && io.MousePos.y <= g_hudpos.y + hudH);
 
-    // Swap Logic
     if (isInside && io.MouseDown[0] && !g_pressing && !g_showsettings) {
         g_pressing = true;
         g_pressstart = nowsec();
@@ -229,7 +217,6 @@ static void drawmenu() {
         g_pressing = false;
     }
 
-    // Move logic
     if (!g_locked && !g_showsettings && isInside && ImGui::IsMouseDragging(0)) {
         g_hudpos.x += io.MouseDelta.x;
         g_hudpos.y += io.MouseDelta.y;
@@ -262,15 +249,17 @@ static void drawmenu() {
     }
 }
 
-// ─── Main Logic ───
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     loadcfg();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
+    
     float scale = (float)g_height / 720.0f;
-    if (scale < 1.5f) scale = 1.5f;
+    if (g_width > 2000) scale *= 1.25f; 
+    else if (scale < 1.5f) scale = 1.5f;
+    
     ImFontConfig cfg; cfg.SizePixels = 30.0f * scale;
     io.Fonts->AddFontDefault(&cfg);
     ImGui_ImplAndroid_Init();
