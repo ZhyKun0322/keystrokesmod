@@ -17,7 +17,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
-#define VERSION "1.0.6"
+#define VERSION "1.0.7"
 
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
@@ -170,7 +170,11 @@ static void drawsettings(ImVec2 hudpos) {
     sw = std::max(sw, 200.0f);
     sh = std::max(sh, 180.0f);
 
-    float px = hudpos.x + g_keysize * 3.0f + g_keysize * 0.12f * 2 + 8.0f;
+    float ks      = g_keysize;
+    float spacing = ks * 0.12f;
+    float hudW    = ks * 3 + spacing * 2;
+
+    float px = hudpos.x + hudW + 8.0f;
     float py = hudpos.y;
     if (px + sw > g_width)  px = hudpos.x - sw - 8.0f;
     if (py + sh > g_height) py = g_height - sh - 8.0f;
@@ -180,12 +184,12 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(sw, sh), ImGuiCond_Always);
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,       ImVec4(0.10f, 0.10f, 0.10f, 0.96f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0.20f, 0.20f, 0.20f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.28f, 0.28f, 0.28f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrab,     ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,         ImVec4(0.10f, 0.10f, 0.10f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,          ImVec4(0.20f, 0.20f, 0.20f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,   ImVec4(0.28f, 0.28f, 0.28f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab,       ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.35f, 1.00f, 0.60f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_CheckMark,      ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark,        ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(10.0f, 10.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(6.0f, 10.0f));
@@ -288,8 +292,11 @@ static void drawmenu() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    ImGui::SetCursorPosX(ks + spacing * 1.5f);
+    // W key centered above S using actual hudW
+    float wpos = (hudW - ks) / 2.0f;
+    ImGui::SetCursorPosX(wpos);
     drawkey("W", k.w, ImVec2(ks, ks));
+
     drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
     drawkey("S", k.s, ImVec2(ks, ks)); ImGui::SameLine();
     drawkey("D", k.d, ImVec2(ks, ks));
@@ -312,8 +319,6 @@ static void setup() {
 
     int minside = std::min(g_width, g_height);
 
-    // Scale anchored to 480p as baseline — keeps HUD small and sane
-    // across all screen sizes including high DPI devices
     float dpscale = (float)minside / 480.0f;
     dpscale = std::max(0.8f, std::min(dpscale, 2.5f));
     g_uiscale = dpscale;
