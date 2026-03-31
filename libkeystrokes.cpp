@@ -281,6 +281,7 @@ static void drawmenu() {
 
     if (g_showsettings) drawsettings(g_hudpos);
 
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
     ImGui::Begin("##ks", nullptr,
         ImGuiWindowFlags_NoTitleBar      |
@@ -292,9 +293,7 @@ static void drawmenu() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    // W key centered above S using actual hudW
-    float wpos = (hudW - ks) / 2.0f;
-    ImGui::SetCursorPosX(wpos);
+    ImGui::SetCursorPosX(ks + spacing);
     drawkey("W", k.w, ImVec2(ks, ks));
 
     drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
@@ -306,7 +305,7 @@ static void drawmenu() {
     drawkey("LMB", k.lmb, ImVec2(half, ks * 0.7f)); ImGui::SameLine();
     drawkey("RMB", k.rmb, ImVec2(half, ks * 0.7f));
 
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(3);
     ImGui::End();
 }
 
