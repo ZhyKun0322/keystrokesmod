@@ -17,7 +17,7 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
-#define VERSION "1.0.7"
+#define VERSION "1.0.9"
 
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
@@ -46,10 +46,16 @@ static bool  g_showsettings = false;
 static ImVec2 g_hudpos      = ImVec2(100, 100);
 static bool  g_posloaded    = false;
 
-static const char* SAVE_PATH = "/data/data/com.mojang.minecraftpe/files/keystrokes.cfg";
+// Save path covers both old and new Minecraft package names
+static const char* SAVE_PATHS[] = {
+    "/data/data/com.mojang.minecraftpe/files/keystrokes.cfg",
+    "/data/data/com.mojang.minecraftpe.preview/files/keystrokes.cfg",
+    nullptr
+};
 
 static bool g_usenewconsume = false;
 
+// Android 14+ added extra bool param — try new signature first
 static const char* consume_syms[] = {
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventEb",
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE",
@@ -60,22 +66,44 @@ static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
 static int32_t (*orig_consume)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
 static int32_t (*orig_consume_new)(void*, void*, bool, long, uint32_t*, AInputEvent**, bool) = nullptr;
 
+static const char* getsavepath() {
+    for (int i = 0; SAVE_PATHS[i]; i++) {
+        FILE* f = fopen(SAVE_PATHS[i], "r");
+        if (f) { fclose(f); return SAVE_PATHS[i]; }
+        // Try writing to check if directory exists
+        f = fopen(SAVE_PATHS[i], "a");
+        if (f) { fclose(f); return SAVE_PATHS[i]; }
+    }
+    return SAVE_PATHS[0];
+}
+
 static void savecfg() {
-    FILE* f = fopen(SAVE_PATH, "w");
+    const char* path = getsavepath();
+    FILE* f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "%f %f %f %f %d\n", g_hudpos.x, g_hudpos.y, g_keysize, g_opacity, (int)g_locked);
+    fprintf(f, "%f %f %f %f %d\n",
+        g_hudpos.x, g_hudpos.y, g_keysize, g_opacity, (int)g_locked);
     fclose(f);
 }
 
 static void loadcfg() {
     if (g_posloaded) return;
     g_posloaded = true;
-    FILE* f = fopen(SAVE_PATH, "r");
-    if (!f) return;
-    int locked = 0;
-    fscanf(f, "%f %f %f %f %d", &g_hudpos.x, &g_hudpos.y, &g_keysize, &g_opacity, &locked);
-    g_locked = (locked != 0);
-    fclose(f);
+    for (int i = 0; SAVE_PATHS[i]; i++) {
+        FILE* f = fopen(SAVE_PATHS[i], "r");
+        if (!f) continue;
+        int locked = 0;
+        int read = fscanf(f, "%f %f %f %f %d",
+            &g_hudpos.x, &g_hudpos.y, &g_keysize, &g_opacity, &locked);
+        fclose(f);
+        if (read == 5) {
+            g_locked = (locked != 0);
+            // Clamp values to valid ranges in case file is corrupted
+            g_keysize = std::max(30.0f, std::min(g_keysize, 120.0f));
+            g_opacity = std::max(0.1f,  std::min(g_opacity, 1.0f));
+            return;
+        }
+    }
 }
 
 static double nowsec() {
@@ -204,7 +232,7 @@ static void drawsettings(ImVec2 hudpos) {
     float labelw = sw * 0.52f;
     float ctrlw  = sw - labelw - 20.0f;
 
-    ImGui::TextColored(ImVec4(0.55f, 0.55f, 0.55f, 1.0f), "KEYSTROKES");
+    ImGui::TextColored(ImVec4(0.55f, 0.55f, 0.55f, 1.0f), "KEYSTROKES v" VERSION);
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -276,6 +304,9 @@ static void drawmenu() {
     if (!g_locked && !g_showsettings && isInside && ImGui::IsMouseDragging(0)) {
         g_hudpos.x += io.MouseDelta.x;
         g_hudpos.y += io.MouseDelta.y;
+        // Clamp HUD position to screen bounds
+        g_hudpos.x = std::max(0.0f, std::min(g_hudpos.x, (float)g_width  - hudW));
+        g_hudpos.y = std::max(0.0f, std::min(g_hudpos.y, (float)g_height - hudH));
         savecfg();
     }
 
@@ -317,12 +348,23 @@ static void setup() {
     io.IniFilename = nullptr;
 
     int minside = std::min(g_width, g_height);
+    int maxside = std::max(g_width, g_height);
 
+    // Scale based on shorter screen dimension anchored to 480px baseline
+    // This keeps font readable at any DPI including very low values like 43
     float dpscale = (float)minside / 480.0f;
-    dpscale = std::max(0.8f, std::min(dpscale, 2.5f));
+
+    // Hard clamp — prevents font going tiny at low DPI or huge at high DPI
+    dpscale = std::max(0.85f, std::min(dpscale, 2.8f));
+
+    // Boost for very high res screens (tablets, high-end phones)
+    if (maxside > 2400) dpscale = std::min(dpscale * 1.15f, 2.8f);
+
     g_uiscale = dpscale;
 
-    float fontsize = std::max(13.0f, 14.0f * dpscale);
+    // Font size scales with dpscale but has a hard minimum of 14px
+    // so it never becomes unreadably small regardless of DPI setting
+    float fontsize = std::max(14.0f, 15.0f * dpscale);
 
     ImFontConfig cfg;
     cfg.SizePixels = fontsize;
@@ -334,6 +376,15 @@ static void setup() {
     ImGuiStyle& style = ImGui::GetStyle();
     style.ScaleAllSizes(dpscale);
     style.WindowBorderSize = 0.0f;
+
+    // Clamp saved HUD position to current screen size
+    // Prevents HUD from being off-screen if resolution changed since last save
+    float ks      = g_keysize;
+    float spacing = ks * 0.12f;
+    float hudW    = ks * 3 + spacing * 2;
+    float hudH    = ks * 4 + spacing * 3;
+    g_hudpos.x = std::max(0.0f, std::min(g_hudpos.x, (float)g_width  - hudW));
+    g_hudpos.y = std::max(0.0f, std::min(g_hudpos.y, (float)g_height - hudH));
 
     g_initialized = true;
 }
@@ -369,6 +420,7 @@ static void* mainthread(void*) {
 
     GlossInit(true);
 
+    // Hook eglSwapBuffers — try libEGL first, fall back to libGLESv2
     GHandle hegl = GlossOpen("libEGL.so");
     void* swap   = (void*)GlossSymbol(hegl, "eglSwapBuffers", nullptr);
     if (!swap) {
@@ -377,6 +429,7 @@ static void* mainthread(void*) {
     }
     if (swap) GlossHook(swap, (void*)hook_eglswapbuffers, (void**)&orig_eglswapbuffers);
 
+    // Hook InputConsumer::consume — try Android 14+ signature first, then old
     GHandle hlib     = GlossOpen("libinput.so");
     void* symconsume = nullptr;
     for (int i = 0; consume_syms[i]; i++) {
