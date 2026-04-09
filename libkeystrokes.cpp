@@ -41,13 +41,12 @@ static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 
 static float g_keysize      = 50.0f;
 static float g_opacity      = 1.0f;
-static float g_rounding     = 8.0f;   // corner radius in dp (0 = square, 50 = pill)
+static float g_rounding     = 8.0f;
 static bool  g_locked       = false;
 static bool  g_showsettings = false;
 static ImVec2 g_hudpos      = ImVec2(100, 100);
 static bool  g_posloaded    = false;
 
-// Save path covers both old and new Minecraft package names
 static const char* SAVE_PATHS[] = {
     "/data/data/com.mojang.minecraftpe/files/keystrokes.cfg",
     "/data/data/com.mojang.minecraftpe.preview/files/keystrokes.cfg",
@@ -56,7 +55,6 @@ static const char* SAVE_PATHS[] = {
 
 static bool g_usenewconsume = false;
 
-// Android 14+ added extra bool param — try new signature first
 static const char* consume_syms[] = {
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventEb",
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE",
@@ -67,14 +65,10 @@ static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
 static int32_t (*orig_consume)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
 static int32_t (*orig_consume_new)(void*, void*, bool, long, uint32_t*, AInputEvent**, bool) = nullptr;
 
-// ─── Time helper ────────────────────────────────────────────────────────────
-
 static double nowsec() {
     using namespace std::chrono;
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
-
-// ─── CPS Tracker ────────────────────────────────────────────────────────────
 
 struct CpsTracker {
     static const int MAX_CLICKS = 64;
@@ -103,8 +97,6 @@ struct CpsTracker {
 
 static CpsTracker g_lmbcps, g_rmbcps;
 static bool g_prevlmb = false, g_prevrmb = false;
-
-// ─── Config save/load ───────────────────────────────────────────────────────
 
 static const char* getsavepath() {
     for (int i = 0; SAVE_PATHS[i]; i++) {
@@ -136,22 +128,18 @@ static void loadcfg() {
             &g_hudpos.x, &g_hudpos.y, &g_keysize, &g_opacity, &locked, &g_rounding);
         fclose(f);
         if (read >= 5) {
-            g_locked = (locked != 0);
-            g_keysize   = std::max(30.0f,  std::min(g_keysize,   120.0f));
-            g_opacity   = std::max(0.1f,   std::min(g_opacity,   1.0f));
-            g_rounding  = std::max(0.0f,   std::min(g_rounding,  50.0f));
+            g_locked   = (locked != 0);
+            g_keysize  = std::max(30.0f,  std::min(g_keysize,  120.0f));
+            g_opacity  = std::max(0.1f,   std::min(g_opacity,  1.0f));
+            g_rounding = std::max(0.0f,   std::min(g_rounding, 50.0f));
             return;
         }
     }
 }
 
-// ─── Long-press state ───────────────────────────────────────────────────────
-
 static bool   g_pressing   = false;
 static double g_pressstart = 0.0;
 static const double LONGPRESS_SEC = 0.5;
-
-// ─── Input processing ───────────────────────────────────────────────────────
 
 static void processinput(AInputEvent* event) {
     if (g_initialized) ImGui_ImplAndroid_HandleInputEvent(event);
@@ -162,17 +150,12 @@ static void processinput(AInputEvent* event) {
         int32_t btnstate = AMotionEvent_getButtonState(event);
         bool newlmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
         bool newrmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
-
-        // Rising-edge detection — only count new presses, not holds
         if (newlmb && !g_prevlmb) g_lmbcps.click();
         if (newrmb && !g_prevrmb) g_rmbcps.click();
-
-        g_prevlmb = newlmb;
-        g_prevrmb = newrmb;
-
+        g_prevlmb  = newlmb;
+        g_prevrmb  = newrmb;
         g_keys.lmb = newlmb;
         g_keys.rmb = newrmb;
-
     } else if (type == AINPUT_EVENT_TYPE_KEY) {
         int32_t action  = AKeyEvent_getAction(event);
         int32_t keycode = AKeyEvent_getKeyCode(event);
@@ -189,19 +172,15 @@ static void processinput(AInputEvent* event) {
 
 static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent) {
     int32_t result = orig_consume ? orig_consume(thiz, a1, a2, a3, a4, outEvent) : 0;
-    if (result == 0 && outEvent && *outEvent)
-        processinput(*outEvent);
+    if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
     return result;
 }
 
 static int32_t hook_consume_new(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent, bool a6) {
     int32_t result = orig_consume_new ? orig_consume_new(thiz, a1, a2, a3, a4, outEvent, a6) : 0;
-    if (result == 0 && outEvent && *outEvent)
-        processinput(*outEvent);
+    if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
     return result;
 }
-
-// ─── GL state save/restore ──────────────────────────────────────────────────
 
 struct glstate {
     GLint prog, tex, atex, abuf, ebuf, vao, fbo, vp[4], sc[4], bsrc, bdst;
@@ -210,7 +189,7 @@ struct glstate {
 
 static void savegl(glstate& s) {
     glGetIntegerv(GL_CURRENT_PROGRAM, &s.prog); glGetIntegerv(GL_TEXTURE_BINDING_2D, &s.tex);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &s.atex); glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &s.abuf);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &s.atex);  glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &s.abuf);
     glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &s.ebuf); glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &s.vao);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s.fbo); glGetIntegerv(GL_VIEWPORT, s.vp);
     glGetIntegerv(GL_SCISSOR_BOX, s.sc); glGetIntegerv(GL_BLEND_SRC_ALPHA, &s.bsrc);
@@ -225,13 +204,11 @@ static void restoregl(const glstate& s) {
     glBindVertexArray(s.vao); glBindFramebuffer(GL_FRAMEBUFFER, s.fbo);
     glViewport(s.vp[0], s.vp[1], s.vp[2], s.vp[3]); glScissor(s.sc[0], s.sc[1], s.sc[2], s.sc[3]);
     glBlendFunc(s.bsrc, s.bdst);
-    s.blend ? glEnable(GL_BLEND) : glDisable(GL_BLEND);
-    s.cull ? glEnable(GL_CULL_FACE) : glDisable(GL_CULL_FACE);
-    s.depth ? glEnable(GL_DEPTH_TEST) : glDisable(GL_DEPTH_TEST);
+    s.blend   ? glEnable(GL_BLEND)        : glDisable(GL_BLEND);
+    s.cull    ? glEnable(GL_CULL_FACE)    : glDisable(GL_CULL_FACE);
+    s.depth   ? glEnable(GL_DEPTH_TEST)   : glDisable(GL_DEPTH_TEST);
     s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
 }
-
-// ─── Draw helpers ───────────────────────────────────────────────────────────
 
 static void drawkey(const char* label, bool pressed, ImVec2 size) {
     float a = g_opacity;
@@ -245,7 +222,6 @@ static void drawkey(const char* label, bool pressed, ImVec2 size) {
     ImGui::PopStyleColor(4);
 }
 
-// LMB / RMB button with label on top and "X CPS" below
 static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps) {
     float a = g_opacity;
     ImVec4 color     = pressed ? ImVec4(1.0f,  1.0f,  1.0f,  0.95f*a)
@@ -265,33 +241,27 @@ static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps) {
     float       fs      = ImGui::GetFontSize();
     float       smallfs = fs * 0.75f;
 
-    // Measure both lines
     ImVec2 labelSz = fn->CalcTextSizeA(fs,      FLT_MAX, 0.0f, label);
     char   cpsbuf[16];
     snprintf(cpsbuf, sizeof(cpsbuf), "%d CPS", cps);
     ImVec2 cpsSz   = fn->CalcTextSizeA(smallfs, FLT_MAX, 0.0f, cpsbuf);
 
-    // Stack both lines as a block, vertically centred inside the button
     float gap      = 3.0f;
     float blockH   = labelSz.y + gap + cpsSz.y;
     float blockTop = pos.y + (size.y - blockH) * 0.5f;
 
-    // Main label
     float lx = pos.x + (size.x - labelSz.x) * 0.5f;
     dl->AddText(fn, fs, ImVec2(lx, blockTop),
                 ImGui::ColorConvertFloat4ToU32(textcolor), label);
 
-    // CPS line — smaller + dimmer, directly below label
-    float   cx     = pos.x + (size.x - cpsSz.x) * 0.5f;
-    float   cy     = blockTop + labelSz.y + gap;
-    ImVec4  dimcol = ImVec4(textcolor.x, textcolor.y, textcolor.z, textcolor.w * 0.70f);
+    float  cx     = pos.x + (size.x - cpsSz.x) * 0.5f;
+    float  cy     = blockTop + labelSz.y + gap;
+    ImVec4 dimcol = ImVec4(textcolor.x, textcolor.y, textcolor.z, textcolor.w * 0.70f);
     dl->AddText(fn, smallfs, ImVec2(cx, cy),
                 ImGui::ColorConvertFloat4ToU32(dimcol), cpsbuf);
 
     ImGui::PopStyleColor(3);
 }
-
-// ─── Settings panel ─────────────────────────────────────────────────────────
 
 static void drawsettings(ImVec2 hudpos) {
     float sw = g_width  * 0.22f;
@@ -384,8 +354,6 @@ static void drawsettings(ImVec2 hudpos) {
     if (outsideclick) g_showsettings = false;
 }
 
-// ─── Main HUD draw ──────────────────────────────────────────────────────────
-
 static void drawmenu() {
     KeyState k;
     { std::lock_guard<std::mutex> lock(g_keymutex); k = g_keys; }
@@ -396,10 +364,9 @@ static void drawmenu() {
     float ks      = g_keysize;
     float spacing = ks * 0.12f;
     float hudW    = ks * 3 + spacing * 2;
-    // LMB/RMB rows are now taller (ks * 1.0f) to fit CPS text
-    float hudH    = ks * 3 + spacing * 2   // W / AS D / SPACE rows
-                  + ks * 0.7f + spacing    // SPACE row
-                  + ks * 1.0f + spacing;   // LMB+RMB row
+    float hudH    = ks * 3 + spacing * 2
+                  + ks * 0.7f + spacing
+                  + ks * 1.5f + spacing;
 
     ImGuiIO& io = ImGui::GetIO();
     bool isInside = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hudW &&
@@ -438,19 +405,15 @@ static void drawmenu() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, g_rounding);
 
-    // W key — centred above A S D
     ImGui::SetCursorPosX(ks + spacing);
     drawkey("W", k.w, ImVec2(ks, ks));
 
-    // A S D row
     drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
     drawkey("S", k.s, ImVec2(ks, ks)); ImGui::SameLine();
     drawkey("D", k.d, ImVec2(ks, ks));
 
-    // SPACE bar
     drawkey("SPACE", k.space, ImVec2(hudW, ks * 0.7f));
 
-    // LMB / RMB with CPS counters — 1.5x key height gives room for two text lines
     float half = (hudW - spacing) / 2.0f;
     drawkeycps("LMB", k.lmb, ImVec2(half, ks * 1.5f), lmbcps); ImGui::SameLine();
     drawkeycps("RMB", k.rmb, ImVec2(half, ks * 1.5f), rmbcps);
@@ -458,8 +421,6 @@ static void drawmenu() {
     ImGui::PopStyleVar(3);
     ImGui::End();
 }
-
-// ─── Setup & render ─────────────────────────────────────────────────────────
 
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
@@ -478,7 +439,6 @@ static void setup() {
     g_uiscale = dpscale;
 
     float fontsize = std::max(14.0f, 15.0f * dpscale);
-
     ImFontConfig cfg;
     cfg.SizePixels = fontsize;
     io.Fonts->AddFontDefault(&cfg);
@@ -514,8 +474,6 @@ static void render() {
     restoregl(s);
 }
 
-// ─── EGL hook ───────────────────────────────────────────────────────────────
-
 static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     EGLContext ctx = eglGetCurrentContext();
     if (ctx == EGL_NO_CONTEXT) return orig_eglswapbuffers(dpy, surf);
@@ -527,8 +485,6 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     if (ctx == g_targetcontext && surf == g_targetsurface) { g_width = w; g_height = h; setup(); render(); }
     return orig_eglswapbuffers(dpy, surf);
 }
-
-// ─── Init thread ────────────────────────────────────────────────────────────
 
 static void* mainthread(void*) {
     sleep(5);
@@ -552,3 +508,19 @@ static void* mainthread(void*) {
             break;
         }
     }
+
+    if (symconsume) {
+        if (g_usenewconsume)
+            GlossHook(symconsume, (void*)hook_consume_new, (void**)&orig_consume_new);
+        else
+            GlossHook(symconsume, (void*)hook_consume,     (void**)&orig_consume);
+    }
+
+    return nullptr;
+}
+
+__attribute__((constructor))
+void keystrokes_init() {
+    pthread_t t;
+    pthread_create(&t, nullptr, mainthread, nullptr);
+}
