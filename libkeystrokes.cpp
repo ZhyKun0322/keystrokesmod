@@ -547,4 +547,8 @@ static void* mainthread(void*) {
     void* symconsume = nullptr;
     for (int i = 0; consume_syms[i]; i++) {
         symconsume = (void*)GlossSymbol(hlib, consume_syms[i], nullptr);
-        if (symconsum
+        if (symconsume) {
+            g_usenewconsume = (i == 0);
+            break;
+        }
+    }
