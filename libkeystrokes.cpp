@@ -559,7 +559,7 @@ static void setup() {
 
     float ks      = g_keysize;
     float spacing = ks * 0.12f;
-    float hudW    = ks * 3 + spacing
+    float hudW    = ks * 3 + spacing * 2;
     float hudH    = ks * 4 + spacing * 3;
     g_hudpos.x = std::max(0.0f, std::min(g_hudpos.x, (float)g_width  - hudW));
     g_hudpos.y = std::max(0.0f, std::min(g_hudpos.y, (float)g_height - hudH));
