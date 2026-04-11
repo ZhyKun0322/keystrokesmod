@@ -39,13 +39,19 @@ static float g_uiscale = 1.0f;
 static EGLContext g_targetcontext = EGL_NO_CONTEXT;
 static EGLSurface g_targetsurface = EGL_NO_SURFACE;
 
-static float g_keysize      = 50.0f;
-static float g_opacity      = 1.0f;
-static float g_rounding     = 8.0f;
-static bool  g_locked       = false;
-static bool  g_showsettings = false;
-static ImVec2 g_hudpos      = ImVec2(100, 100);
-static bool  g_posloaded    = false;
+static float g_keysize          = 50.0f;
+static float g_opacity          = 1.0f;
+static float g_rounding         = 8.0f;
+static float g_flickerintensity = 0.85f;
+static float g_flickerspeed     = 0.35f; // seconds until flicker fades
+static bool  g_locked           = false;
+static bool  g_showsettings     = false;
+static ImVec2 g_hudpos          = ImVec2(100, 100);
+static bool  g_posloaded        = false;
+
+// Flicker state
+enum FlickerIdx { FW=0, FA, FS, FD, FSPACE, FLMB, FRMB, FLICKER_COUNT };
+static double g_flickertimes[FLICKER_COUNT] = {};
 
 static const char* SAVE_PATHS[] = {
     "/data/data/com.mojang.minecraftpe/files/keystrokes.cfg",
@@ -69,6 +75,23 @@ static double nowsec() {
     using namespace std::chrono;
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
+
+// ── Flicker helpers ──────────────────────────────────────────────────────────
+
+static void recordflicker(int idx) {
+    if (idx >= 0 && idx < FLICKER_COUNT)
+        g_flickertimes[idx] = nowsec();
+}
+
+static float flickeralpha(int idx) {
+    if (idx < 0 || idx >= FLICKER_COUNT) return 0.0f;
+    double elapsed = nowsec() - g_flickertimes[idx];
+    if (elapsed > (double)g_flickerspeed) return 0.0f;
+    float t = (float)(elapsed / (double)g_flickerspeed);
+    return (1.0f - t) * (1.0f - t) * g_flickerintensity;
+}
+
+// ── CPS tracker ─────────────────────────────────────────────────────────────
 
 struct CpsTracker {
     static const int MAX_CLICKS = 64;
@@ -98,6 +121,8 @@ struct CpsTracker {
 static CpsTracker g_lmbcps, g_rmbcps;
 static bool g_prevlmb = false, g_prevrmb = false;
 
+// ── Config save/load ─────────────────────────────────────────────────────────
+
 static const char* getsavepath() {
     for (int i = 0; SAVE_PATHS[i]; i++) {
         FILE* f = fopen(SAVE_PATHS[i], "r");
@@ -112,8 +137,9 @@ static void savecfg() {
     const char* path = getsavepath();
     FILE* f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "%f %f %f %f %d %f\n",
-        g_hudpos.x, g_hudpos.y, g_keysize, g_opacity, (int)g_locked, g_rounding);
+    fprintf(f, "%f %f %f %f %d %f %f %f\n",
+        g_hudpos.x, g_hudpos.y, g_keysize, g_opacity,
+        (int)g_locked, g_rounding, g_flickerintensity, g_flickerspeed);
     fclose(f);
 }
 
@@ -124,18 +150,23 @@ static void loadcfg() {
         FILE* f = fopen(SAVE_PATHS[i], "r");
         if (!f) continue;
         int locked = 0;
-        int read = fscanf(f, "%f %f %f %f %d %f",
-            &g_hudpos.x, &g_hudpos.y, &g_keysize, &g_opacity, &locked, &g_rounding);
+        int read = fscanf(f, "%f %f %f %f %d %f %f %f",
+            &g_hudpos.x, &g_hudpos.y, &g_keysize, &g_opacity,
+            &locked, &g_rounding, &g_flickerintensity, &g_flickerspeed);
         fclose(f);
         if (read >= 5) {
-            g_locked   = (locked != 0);
-            g_keysize  = std::max(30.0f,  std::min(g_keysize,  120.0f));
-            g_opacity  = std::max(0.1f,   std::min(g_opacity,  1.0f));
-            g_rounding = std::max(0.0f,   std::min(g_rounding, 50.0f));
+            g_locked           = (locked != 0);
+            g_keysize          = std::max(30.0f,  std::min(g_keysize,  120.0f));
+            g_opacity          = std::max(0.1f,   std::min(g_opacity,  1.0f));
+            g_rounding         = std::max(0.0f,   std::min(g_rounding, 50.0f));
+            g_flickerintensity = std::max(0.0f,   std::min(g_flickerintensity, 1.0f));
+            g_flickerspeed     = std::max(0.05f,  std::min(g_flickerspeed, 1.0f));
             return;
         }
     }
 }
+
+// ── Input processing ─────────────────────────────────────────────────────────
 
 static bool   g_pressing   = false;
 static double g_pressstart = 0.0;
@@ -150,8 +181,8 @@ static void processinput(AInputEvent* event) {
         int32_t btnstate = AMotionEvent_getButtonState(event);
         bool newlmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
         bool newrmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
-        if (newlmb && !g_prevlmb) g_lmbcps.click();
-        if (newrmb && !g_prevrmb) g_rmbcps.click();
+        if (newlmb && !g_prevlmb) { g_lmbcps.click(); recordflicker(FLMB); }
+        if (newrmb && !g_prevrmb) { g_rmbcps.click(); recordflicker(FRMB); }
         g_prevlmb  = newlmb;
         g_prevrmb  = newrmb;
         g_keys.lmb = newlmb;
@@ -161,11 +192,21 @@ static void processinput(AInputEvent* event) {
         int32_t keycode = AKeyEvent_getKeyCode(event);
         bool isPressed  = (action == AKEY_EVENT_ACTION_DOWN);
         switch (keycode) {
-            case AKEYCODE_W:     g_keys.w     = isPressed; break;
-            case AKEYCODE_A:     g_keys.a     = isPressed; break;
-            case AKEYCODE_S:     g_keys.s     = isPressed; break;
-            case AKEYCODE_D:     g_keys.d     = isPressed; break;
-            case AKEYCODE_SPACE: g_keys.space = isPressed; break;
+            case AKEYCODE_W:
+                if (isPressed && !g_keys.w) recordflicker(FW);
+                g_keys.w = isPressed; break;
+            case AKEYCODE_A:
+                if (isPressed && !g_keys.a) recordflicker(FA);
+                g_keys.a = isPressed; break;
+            case AKEYCODE_S:
+                if (isPressed && !g_keys.s) recordflicker(FS);
+                g_keys.s = isPressed; break;
+            case AKEYCODE_D:
+                if (isPressed && !g_keys.d) recordflicker(FD);
+                g_keys.d = isPressed; break;
+            case AKEYCODE_SPACE:
+                if (isPressed && !g_keys.space) recordflicker(FSPACE);
+                g_keys.space = isPressed; break;
         }
     }
 }
@@ -181,6 +222,8 @@ static int32_t hook_consume_new(void* thiz, void* a1, bool a2, long a3, uint32_t
     if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
     return result;
 }
+
+// ── GL state save/restore ────────────────────────────────────────────────────
 
 struct glstate {
     GLint prog, tex, atex, abuf, ebuf, vao, fbo, vp[4], sc[4], bsrc, bdst;
@@ -210,10 +253,28 @@ static void restoregl(const glstate& s) {
     s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
 }
 
-static void drawkey(const char* label, bool pressed, ImVec2 size) {
-    float a = g_opacity;
-    ImVec4 color     = pressed ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f*a) : ImVec4(0.15f, 0.15f, 0.15f, 0.7f*a);
-    ImVec4 textcolor = pressed ? ImVec4(0.0f, 0.0f, 0.0f, a)       : ImVec4(1.0f,  1.0f,  1.0f,  a);
+// ── Draw helpers ─────────────────────────────────────────────────────────────
+
+static void drawkey(const char* label, bool pressed, ImVec2 size, int flickidx = -1) {
+    float a     = g_opacity;
+    float fglow = flickeralpha(flickidx);
+
+    ImVec4 base = pressed
+        ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f * a)
+        : ImVec4(0.15f, 0.15f, 0.15f, 0.7f * a);
+
+    // Warm flicker tint (white with slight yellow)
+    ImVec4 color = ImVec4(
+        std::min(1.0f, base.x + fglow),
+        std::min(1.0f, base.y + fglow * 0.92f),
+        std::min(1.0f, base.z + fglow * 0.55f),
+        base.w
+    );
+
+    ImVec4 textcolor = pressed
+        ? ImVec4(0.0f, 0.0f, 0.0f, a)
+        : ImVec4(1.0f, 1.0f, 1.0f, a);
+
     ImGui::PushStyleColor(ImGuiCol_Button,        color);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  color);
@@ -222,12 +283,24 @@ static void drawkey(const char* label, bool pressed, ImVec2 size) {
     ImGui::PopStyleColor(4);
 }
 
-static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps) {
-    float a = g_opacity;
-    ImVec4 color     = pressed ? ImVec4(1.0f,  1.0f,  1.0f,  0.95f*a)
-                               : ImVec4(0.15f, 0.15f, 0.15f, 0.7f*a);
-    ImVec4 textcolor = pressed ? ImVec4(0.0f, 0.0f, 0.0f, a)
-                               : ImVec4(1.0f, 1.0f, 1.0f, a);
+static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps, int flickidx = -1) {
+    float a     = g_opacity;
+    float fglow = flickeralpha(flickidx);
+
+    ImVec4 base = pressed
+        ? ImVec4(1.0f,  1.0f,  1.0f,  0.95f * a)
+        : ImVec4(0.15f, 0.15f, 0.15f, 0.7f  * a);
+
+    ImVec4 color = ImVec4(
+        std::min(1.0f, base.x + fglow),
+        std::min(1.0f, base.y + fglow * 0.92f),
+        std::min(1.0f, base.z + fglow * 0.55f),
+        base.w
+    );
+
+    ImVec4 textcolor = pressed
+        ? ImVec4(0.0f, 0.0f, 0.0f, a)
+        : ImVec4(1.0f, 1.0f, 1.0f, a);
 
     ImGui::PushStyleColor(ImGuiCol_Button,        color);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
@@ -263,11 +336,13 @@ static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps) {
     ImGui::PopStyleColor(3);
 }
 
+// ── Settings panel ───────────────────────────────────────────────────────────
+
 static void drawsettings(ImVec2 hudpos) {
     float sw = g_width  * 0.22f;
-    float sh = g_height * 0.46f;
+    float sh = g_height * 0.62f;
     sw = std::max(sw, 200.0f);
-    sh = std::max(sh, 220.0f);
+    sh = std::max(sh, 300.0f);
 
     float ks      = g_keysize;
     float spacing = ks * 0.12f;
@@ -307,12 +382,14 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::Separator();
     ImGui::Spacing();
 
+    // Size
     ImGui::Text("Size: %.0fdp", g_keysize);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::SliderFloat("##sz", &g_keysize, 30.0f, 120.0f, "")) savecfg();
 
     ImGui::Spacing();
 
+    // Opacity
     float op = g_opacity * 100.0f;
     ImGui::Text("Opacity: %.0f%%", op);
     ImGui::SetNextItemWidth(-1);
@@ -323,6 +400,7 @@ static void drawsettings(ImVec2 hudpos) {
 
     ImGui::Spacing();
 
+    // Corners
     ImGui::Text("Corners: %.0fdp", g_rounding);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::SliderFloat("##rnd", &g_rounding, 0.0f, 50.0f, "")) savecfg();
@@ -331,6 +409,31 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::Separator();
     ImGui::Spacing();
 
+    // Flicker intensity
+    float fi = g_flickerintensity * 100.0f;
+    ImGui::Text("Flicker: %.0f%%", fi);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("##fi", &fi, 0.0f, 100.0f, "")) {
+        g_flickerintensity = fi / 100.0f;
+        savecfg();
+    }
+
+    ImGui::Spacing();
+
+    // Flicker speed (inverted: 100% = fastest fade)
+    float fspct = (1.0f - ((g_flickerspeed - 0.05f) / 0.95f)) * 100.0f;
+    ImGui::Text("Flicker Speed: %.0f%%", fspct);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("##fs", &fspct, 0.0f, 100.0f, "")) {
+        g_flickerspeed = 0.05f + (1.0f - fspct / 100.0f) * 0.95f;
+        savecfg();
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Lock position
     ImGui::Columns(2, "##lkcol", false);
     ImGui::SetColumnWidth(0, labelw);
     ImGui::Text("Lock Position");
@@ -353,6 +456,8 @@ static void drawsettings(ImVec2 hudpos) {
          io.MousePos.y < py || io.MousePos.y > py + sh);
     if (outsideclick) g_showsettings = false;
 }
+
+// ── Main HUD draw ─────────────────────────────────────────────────────────────
 
 static void drawmenu() {
     KeyState k;
@@ -406,21 +511,23 @@ static void drawmenu() {
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, g_rounding);
 
     ImGui::SetCursorPosX(ks + spacing);
-    drawkey("W", k.w, ImVec2(ks, ks));
+    drawkey("W",     k.w,     ImVec2(ks, ks),          FW);
 
-    drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
-    drawkey("S", k.s, ImVec2(ks, ks)); ImGui::SameLine();
-    drawkey("D", k.d, ImVec2(ks, ks));
+    drawkey("A",     k.a,     ImVec2(ks, ks),          FA); ImGui::SameLine();
+    drawkey("S",     k.s,     ImVec2(ks, ks),          FS); ImGui::SameLine();
+    drawkey("D",     k.d,     ImVec2(ks, ks),          FD);
 
-    drawkey("SPACE", k.space, ImVec2(hudW, ks * 0.7f));
+    drawkey("SPACE", k.space, ImVec2(hudW, ks * 0.7f), FSPACE);
 
     float half = (hudW - spacing) / 2.0f;
-    drawkeycps("LMB", k.lmb, ImVec2(half, ks * 1.5f), lmbcps); ImGui::SameLine();
-    drawkeycps("RMB", k.rmb, ImVec2(half, ks * 1.5f), rmbcps);
+    drawkeycps("LMB", k.lmb, ImVec2(half, ks * 1.5f), lmbcps, FLMB); ImGui::SameLine();
+    drawkeycps("RMB", k.rmb, ImVec2(half, ks * 1.5f), rmbcps, FRMB);
 
     ImGui::PopStyleVar(3);
     ImGui::End();
 }
+
+// ── Render & setup ───────────────────────────────────────────────────────────
 
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
@@ -452,7 +559,7 @@ static void setup() {
 
     float ks      = g_keysize;
     float spacing = ks * 0.12f;
-    float hudW    = ks * 3 + spacing * 2;
+    float hudW    = ks * 3 + spacing
     float hudH    = ks * 4 + spacing * 3;
     g_hudpos.x = std::max(0.0f, std::min(g_hudpos.x, (float)g_width  - hudW));
     g_hudpos.y = std::max(0.0f, std::min(g_hudpos.y, (float)g_height - hudH));
@@ -485,6 +592,8 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     if (ctx == g_targetcontext && surf == g_targetsurface) { g_width = w; g_height = h; setup(); render(); }
     return orig_eglswapbuffers(dpy, surf);
 }
+
+// ── Entry point ──────────────────────────────────────────────────────────────
 
 static void* mainthread(void*) {
     sleep(5);
