@@ -98,6 +98,10 @@ struct CpsTracker {
 static CpsTracker g_lmbcps, g_rmbcps;
 static bool g_prevlmb = false, g_prevrmb = false;
 
+// Touch scroll state
+static float g_lasttouchy = 0.0f;
+static bool  g_touchdown  = false;
+
 static const char* getsavepath() {
     for (int i = 0; SAVE_PATHS[i]; i++) {
         FILE* f = fopen(SAVE_PATHS[i], "r");
@@ -146,8 +150,11 @@ static void processinput(AInputEvent* event) {
     int32_t type = AInputEvent_getType(event);
 
     std::lock_guard<std::mutex> lock(g_keymutex);
+
     if (type == AINPUT_EVENT_TYPE_MOTION) {
+        int32_t action   = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
         int32_t btnstate = AMotionEvent_getButtonState(event);
+
         bool newlmb = (btnstate & AMOTION_EVENT_BUTTON_PRIMARY)   != 0;
         bool newrmb = (btnstate & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
         if (newlmb && !g_prevlmb) g_lmbcps.click();
@@ -156,6 +163,31 @@ static void processinput(AInputEvent* event) {
         g_prevrmb  = newrmb;
         g_keys.lmb = newlmb;
         g_keys.rmb = newrmb;
+
+        // Touch scroll forwarding — only active when settings panel is open
+        if (g_initialized && g_showsettings) {
+            float tx = AMotionEvent_getX(event, 0);
+            float ty = AMotionEvent_getY(event, 0);
+            ImGuiIO& io = ImGui::GetIO();
+
+            if (action == AMOTION_EVENT_ACTION_DOWN) {
+                g_lasttouchy    = ty;
+                g_touchdown     = true;
+                io.MousePos     = ImVec2(tx, ty);
+                io.MouseDown[0] = true;
+            } else if (action == AMOTION_EVENT_ACTION_MOVE && g_touchdown) {
+                float dy     = ty - g_lasttouchy;
+                g_lasttouchy = ty;
+                io.MousePos  = ImVec2(tx, ty);
+                // Inject vertical finger drag as scroll delta
+                io.MouseWheel += dy * -0.06f;
+            } else if (action == AMOTION_EVENT_ACTION_UP ||
+                       action == AMOTION_EVENT_ACTION_CANCEL) {
+                g_touchdown     = false;
+                io.MouseDown[0] = false;
+            }
+        }
+
     } else if (type == AINPUT_EVENT_TYPE_KEY) {
         int32_t action  = AKeyEvent_getAction(event);
         int32_t keycode = AKeyEvent_getKeyCode(event);
@@ -289,24 +321,24 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::SetNextWindowSize(ImVec2(sw, sh), ImGuiCond_Always);
 
     // White/blue color theme
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,          ImVec4(0.10f, 0.12f, 0.16f, 0.97f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,           ImVec4(0.16f, 0.20f, 0.28f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,    ImVec4(0.22f, 0.28f, 0.38f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrab,        ImVec4(0.35f, 0.65f, 1.00f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive,  ImVec4(0.50f, 0.80f, 1.00f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_CheckMark,         ImVec4(0.35f, 0.65f, 1.00f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_Separator,         ImVec4(0.25f, 0.32f, 0.45f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg,       ImVec4(0.08f, 0.10f, 0.14f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,     ImVec4(0.30f, 0.50f, 0.80f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,             ImVec4(0.10f, 0.12f, 0.16f, 0.97f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,              ImVec4(0.16f, 0.20f, 0.28f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,       ImVec4(0.22f, 0.28f, 0.38f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab,           ImVec4(0.35f, 0.65f, 1.00f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive,     ImVec4(0.50f, 0.80f, 1.00f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark,            ImVec4(0.35f, 0.65f, 1.00f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Separator,            ImVec4(0.25f, 0.32f, 0.45f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg,          ImVec4(0.08f, 0.10f, 0.14f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,        ImVec4(0.30f, 0.50f, 0.80f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, ImVec4(0.40f, 0.60f, 0.90f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive,  ImVec4(0.50f, 0.75f, 1.00f, 1.00f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,  10.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   ImVec2(12.0f, 12.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,     ImVec2(6.0f, 11.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,    ImVec2(6.0f, 4.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,   6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(12.0f, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(6.0f, 11.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,   ImVec2(6.0f, 4.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,  6.0f);
 
-    // NoScrollbar removed so the panel is scrollable
+    // NoScrollbar intentionally removed — panel is fully scrollable by touch and mouse
     ImGui::Begin("##cfg", nullptr,
         ImGuiWindowFlags_NoTitleBar |
         ImGuiWindowFlags_NoResize   |
@@ -364,7 +396,6 @@ static void drawsettings(ImVec2 hudpos) {
     // ── Reset to Default ────────────────────────────────────────────────────
     ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "RESET");
     ImGui::Spacing();
-
     ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.30f, 0.55f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.42f, 0.72f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.35f, 0.55f, 0.90f, 1.00f));
@@ -414,7 +445,7 @@ static void drawmenu() {
     float hudW    = ks * 3 + spacing * 2;
     float hudH    = ks * 3     + spacing * 2   // W + ASD rows
                   + ks * 1.5f + spacing        // LMB/RMB row
-                  + ks * 0.7f + spacing;       // dash/space row
+                  + ks * 0.7f + spacing;       // space bar row
 
     ImGuiIO& io = ImGui::GetIO();
     bool isInside = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hudW &&
@@ -467,14 +498,14 @@ static void drawmenu() {
     drawkeycps("LMB", k.lmb, ImVec2(half, ks * 1.5f), lmbcps); ImGui::SameLine();
     drawkeycps("RMB", k.rmb, ImVec2(half, ks * 1.5f), rmbcps);
 
-    // Row 4: Space bar shown as dash line
-    drawkey("- - - - -", k.space, ImVec2(hudW, ks * 0.7f));
+    // Row 4: Space bar — thick horizontal line (UTF-8 box drawing: ━━━━━)
+    drawkey("\xe2\x94\x81\xe2\x94\x81\xe2\x94\x81\xe2\x94\x81\xe2\x94\x81", k.space, ImVec2(hudW, ks * 0.7f));
 
     ImGui::PopStyleVar(3);
     ImGui::End();
 }
 
-// ── ImGui setup ──────────────────────────────────────────────────────────────
+// ── ImGui setup ──────────────────────────────────────
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     loadcfg();
