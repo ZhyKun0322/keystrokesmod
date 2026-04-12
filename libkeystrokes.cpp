@@ -17,6 +17,10 @@
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
+#define LOG_TAG "Keystrokes"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
+
 #define VERSION "1.2.1"
 
 struct KeyState {
@@ -53,17 +57,58 @@ static const char* SAVE_PATHS[] = {
     nullptr
 };
 
-static bool g_usenewconsume = false;
+// ── InputConsumer::consume symbol variants across Android versions ─────────────
+//
+//  Variant 0 — Android 13+ (NDK r25+):
+//    consume(InputEventFactoryInterface*, bool, long, uint32_t*, InputEvent**, bool)
+//    Trailing bool = resampling flag added in Android 13
+//
+//  Variant 1 — Android 11–12 (NDK r23–r24):
+//    consume(InputEventFactoryInterface*, bool, long, uint32_t*, InputEvent**)
+//    No trailing bool
+//
+//  Variant 2 — Android 10 (NDK r21):
+//    consume(InputEventFactoryInterface*, bool, long long, uint32_t*, InputEvent**)
+//    nsecs_t resolves to long long on this ABI, changes mangling
+//
+//  Variant 3 — Android 9 (NDK r19):
+//    consume(InputEventFactoryInterface*, bool, long long, InputEvent**, uint32_t*)
+//    outEvent and outSeq args are swapped vs later versions
+//
+//  Variant 4 — Android 9 alternate (some vendor ROMs):
+//    consume(InputEventFactoryInterface*, bool, long long, InputEvent**, uint32_t*, bool)
+//    Same swap as variant 3 but with an extra trailing bool
 
 static const char* consume_syms[] = {
+    // Variant 0 — Android 13+, trailing bool (resampling)
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventEb",
+    // Variant 1 — Android 11-12, no trailing bool
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE",
+    // Variant 2 — Android 10, nsecs_t = long long
+    "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEbxPjPPNS_10InputEventE",
+    // Variant 3 — Android 9, swapped outSeq/outEvent arg order
+    "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEbxPPNS_10InputEventEPj",
+    // Variant 4 — Android 9 alternate vendor ROM
+    "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEbxPPNS_10InputEventEPjb",
     nullptr
 };
 
+static int g_consume_variant = -1;
+
+// One function pointer type per variant — must match exactly or you'll get UB/crashes
+typedef int32_t (*consume_fn_0)(void*, void*, bool, long,      uint32_t*, AInputEvent**, bool);
+typedef int32_t (*consume_fn_1)(void*, void*, bool, long,      uint32_t*, AInputEvent**);
+typedef int32_t (*consume_fn_2)(void*, void*, bool, long long, uint32_t*, AInputEvent**);
+typedef int32_t (*consume_fn_3)(void*, void*, bool, long long, AInputEvent**, uint32_t*);
+typedef int32_t (*consume_fn_4)(void*, void*, bool, long long, AInputEvent**, uint32_t*, bool);
+
+static consume_fn_0 orig_consume_0 = nullptr;
+static consume_fn_1 orig_consume_1 = nullptr;
+static consume_fn_2 orig_consume_2 = nullptr;
+static consume_fn_3 orig_consume_3 = nullptr;
+static consume_fn_4 orig_consume_4 = nullptr;
+
 static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
-static int32_t (*orig_consume)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
-static int32_t (*orig_consume_new)(void*, void*, bool, long, uint32_t*, AInputEvent**, bool) = nullptr;
 
 static double nowsec() {
     using namespace std::chrono;
@@ -98,7 +143,6 @@ struct CpsTracker {
 static CpsTracker g_lmbcps, g_rmbcps;
 static bool g_prevlmb = false, g_prevrmb = false;
 
-// Touch scroll state
 static float g_lasttouchy = 0.0f;
 static bool  g_touchdown  = false;
 
@@ -164,7 +208,6 @@ static void processinput(AInputEvent* event) {
         g_keys.lmb = newlmb;
         g_keys.rmb = newrmb;
 
-        // Touch scroll forwarding — only active when settings panel is open
         if (g_initialized && g_showsettings) {
             float tx = AMotionEvent_getX(event, 0);
             float ty = AMotionEvent_getY(event, 0);
@@ -179,7 +222,7 @@ static void processinput(AInputEvent* event) {
                 float dy     = ty - g_lasttouchy;
                 g_lasttouchy = ty;
                 io.MousePos  = ImVec2(tx, ty);
-                // Natural scroll: drag finger down (dy > 0) → scroll content down
+                // Natural scroll: drag finger down → content moves down
                 // ImGui MouseWheel positive = scroll up, so negate dy
                 io.MouseWheel += dy * -0.06f;
             } else if (action == AMOTION_EVENT_ACTION_UP ||
@@ -203,14 +246,34 @@ static void processinput(AInputEvent* event) {
     }
 }
 
-static int32_t hook_consume(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent) {
-    int32_t result = orig_consume ? orig_consume(thiz, a1, a2, a3, a4, outEvent) : 0;
+// ── Per-variant hook trampolines — each calls the matching orig with correct signature
+
+static int32_t hook_consume_0(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent, bool a6) {
+    int32_t result = orig_consume_0 ? orig_consume_0(thiz, a1, a2, a3, a4, outEvent, a6) : 0;
     if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
     return result;
 }
 
-static int32_t hook_consume_new(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent, bool a6) {
-    int32_t result = orig_consume_new ? orig_consume_new(thiz, a1, a2, a3, a4, outEvent, a6) : 0;
+static int32_t hook_consume_1(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent) {
+    int32_t result = orig_consume_1 ? orig_consume_1(thiz, a1, a2, a3, a4, outEvent) : 0;
+    if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
+    return result;
+}
+
+static int32_t hook_consume_2(void* thiz, void* a1, bool a2, long long a3, uint32_t* a4, AInputEvent** outEvent) {
+    int32_t result = orig_consume_2 ? orig_consume_2(thiz, a1, a2, a3, a4, outEvent) : 0;
+    if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
+    return result;
+}
+
+static int32_t hook_consume_3(void* thiz, void* a1, bool a2, long long a3, AInputEvent** outEvent, uint32_t* a4) {
+    int32_t result = orig_consume_3 ? orig_consume_3(thiz, a1, a2, a3, outEvent, a4) : 0;
+    if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
+    return result;
+}
+
+static int32_t hook_consume_4(void* thiz, void* a1, bool a2, long long a3, AInputEvent** outEvent, uint32_t* a4, bool a6) {
+    int32_t result = orig_consume_4 ? orig_consume_4(thiz, a1, a2, a3, outEvent, a4, a6) : 0;
     if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
     return result;
 }
@@ -243,7 +306,6 @@ static void restoregl(const glstate& s) {
     s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
 }
 
-// ── Key drawing: dark slate style ────────────────────────────────────────────
 static void drawkey(const char* label, bool pressed, ImVec2 size) {
     float a = g_opacity;
     ImVec4 color     = pressed ? ImVec4(0.85f, 0.85f, 0.85f, 0.95f*a)
@@ -258,7 +320,6 @@ static void drawkey(const char* label, bool pressed, ImVec2 size) {
     ImGui::PopStyleColor(4);
 }
 
-// ── CPS key drawing ──────────────────────────────────────────────────────────
 static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps) {
     float a = g_opacity;
     ImVec4 color     = pressed ? ImVec4(0.85f, 0.85f, 0.85f, 0.95f*a)
@@ -300,7 +361,6 @@ static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps) {
     ImGui::PopStyleColor(3);
 }
 
-// ── Settings panel: white/blue theme, scrollable, ZhyKun credit ─────────────
 static void drawsettings(ImVec2 hudpos) {
     float sw = g_width  * 0.26f;
     float sh = g_height * 0.62f;
@@ -321,7 +381,6 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(sw, sh), ImGuiCond_Always);
 
-    // White/blue color theme
     ImGui::PushStyleColor(ImGuiCol_WindowBg,             ImVec4(0.10f, 0.12f, 0.16f, 0.97f));
     ImGui::PushStyleColor(ImGuiCol_FrameBg,              ImVec4(0.16f, 0.20f, 0.28f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,       ImVec4(0.22f, 0.28f, 0.38f, 1.00f));
@@ -339,7 +398,6 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,   ImVec2(6.0f, 4.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,  6.0f);
 
-    // NoScrollbar intentionally removed — panel is fully scrollable by touch and mouse
     ImGui::Begin("##cfg", nullptr,
         ImGuiWindowFlags_NoTitleBar |
         ImGuiWindowFlags_NoResize   |
@@ -347,13 +405,21 @@ static void drawsettings(ImVec2 hudpos) {
 
     float ctrlw = sw - 24.0f;
 
-    // ── Header ──────────────────────────────────────────────────────────────
     ImGui::TextColored(ImVec4(0.85f, 0.92f, 1.00f, 1.0f), "KEYSTROKES  v" VERSION);
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ── Key Size ────────────────────────────────────────────────────────────
+    // Debug: show which consume variant matched on this device
+    if (g_consume_variant >= 0)
+        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "Hook: variant %d (OK)", g_consume_variant);
+    else
+        ImGui::TextColored(ImVec4(1.00f, 0.35f, 0.35f, 1.0f), "Hook: NOT FOUND");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
     ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "KEY SIZE");
     ImGui::TextColored(ImVec4(0.90f, 0.93f, 1.00f, 1.0f), "%.0f dp", g_keysize);
     ImGui::SetNextItemWidth(ctrlw);
@@ -361,7 +427,6 @@ static void drawsettings(ImVec2 hudpos) {
 
     ImGui::Spacing();
 
-    // ── Opacity ─────────────────────────────────────────────────────────────
     ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "OPACITY");
     float op = g_opacity * 100.0f;
     ImGui::TextColored(ImVec4(0.90f, 0.93f, 1.00f, 1.0f), "%.0f%%", op);
@@ -373,7 +438,6 @@ static void drawsettings(ImVec2 hudpos) {
 
     ImGui::Spacing();
 
-    // ── Corner Radius ───────────────────────────────────────────────────────
     ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "CORNER RADIUS");
     ImGui::TextColored(ImVec4(0.90f, 0.93f, 1.00f, 1.0f), "%.0f dp", g_rounding);
     ImGui::SetNextItemWidth(ctrlw);
@@ -383,7 +447,6 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ── Lock Position ───────────────────────────────────────────────────────
     ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "LOCK POSITION");
     bool locked = g_locked;
     if (ImGui::Checkbox("##lk", &locked)) { g_locked = locked; savecfg(); }
@@ -394,7 +457,6 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ── Reset to Default ────────────────────────────────────────────────────
     ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "RESET");
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.30f, 0.55f, 1.00f));
@@ -411,7 +473,6 @@ static void drawsettings(ImVec2 hudpos) {
     }
     ImGui::PopStyleColor(4);
 
-    // ── Credit pinned to bottom ──────────────────────────────────────────────
     float remaining = ImGui::GetContentRegionAvail().y
                     - ImGui::GetTextLineHeightWithSpacing() * 2.5f;
     if (remaining > 0) ImGui::Dummy(ImVec2(0, remaining));
@@ -433,7 +494,6 @@ static void drawsettings(ImVec2 hudpos) {
     if (outsideclick) g_showsettings = false;
 }
 
-// ── Main HUD layout ──────────────────────────────────────────────────────────
 static void drawmenu() {
     KeyState k;
     { std::lock_guard<std::mutex> lock(g_keymutex); k = g_keys; }
@@ -444,9 +504,9 @@ static void drawmenu() {
     float ks      = g_keysize;
     float spacing = ks * 0.04f;
     float hudW    = ks * 3 + spacing * 2;
-    float hudH    = ks * 3     + spacing * 2   // W + ASD rows
-                  + ks * 1.5f + spacing        // LMB/RMB row
-                  + ks * 0.7f + spacing;       // space bar row
+    float hudH    = ks * 3     + spacing * 2
+                  + ks * 1.5f + spacing
+                  + ks * 0.7f + spacing;
 
     ImGuiIO& io = ImGui::GetIO();
     bool isInside = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hudW &&
@@ -485,28 +545,23 @@ static void drawmenu() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, g_rounding);
 
-    // Row 1: W (centered)
     ImGui::SetCursorPosX(ks + spacing);
     drawkey("W", k.w, ImVec2(ks, ks));
 
-    // Row 2: A S D
     drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
     drawkey("S", k.s, ImVec2(ks, ks)); ImGui::SameLine();
     drawkey("D", k.d, ImVec2(ks, ks));
 
-    // Row 3: LMB | RMB with CPS
     float half = (hudW - spacing) / 2.0f;
     drawkeycps("LMB", k.lmb, ImVec2(half, ks * 1.5f), lmbcps); ImGui::SameLine();
     drawkeycps("RMB", k.rmb, ImVec2(half, ks * 1.5f), rmbcps);
 
-    // Row 4: Space bar
     drawkey("_____", k.space, ImVec2(hudW, ks * 0.7f));
 
     ImGui::PopStyleVar(3);
     ImGui::End();
 }
 
-// ── ImGui setup ──────────────────────────────────────
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     loadcfg();
@@ -545,7 +600,6 @@ static void setup() {
     g_initialized = true;
 }
 
-// ── Render ───────────────────────────────────────────────────────────────────
 static void render() {
     if (!g_initialized) return;
     glstate s; savegl(s);
@@ -560,7 +614,6 @@ static void render() {
     restoregl(s);
 }
 
-// ── EGL swap hook ────────────────────────────────────────────────────────────
 static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     EGLContext ctx = eglGetCurrentContext();
     if (ctx == EGL_NO_CONTEXT) return orig_eglswapbuffers(dpy, surf);
@@ -573,12 +626,12 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     return orig_eglswapbuffers(dpy, surf);
 }
 
-// ── Hook init thread ─────────────────────────────────────────────────────────
 static void* mainthread(void*) {
     sleep(5);
 
     GlossInit(true);
 
+    // Hook EGL swap
     GHandle hegl = GlossOpen("libEGL.so");
     void* swap   = (void*)GlossSymbol(hegl, "eglSwapBuffers", nullptr);
     if (!swap) {
@@ -587,27 +640,35 @@ static void* mainthread(void*) {
     }
     if (swap) GlossHook(swap, (void*)hook_eglswapbuffers, (void**)&orig_eglswapbuffers);
 
+    // Hook InputConsumer::consume — try every known variant in order
     GHandle hlib     = GlossOpen("libinput.so");
-    void* symconsume = nullptr;
+    void*   symconsume = nullptr;
+
     for (int i = 0; consume_syms[i]; i++) {
         symconsume = (void*)GlossSymbol(hlib, consume_syms[i], nullptr);
         if (symconsume) {
-            g_usenewconsume = (i == 0);
+            g_consume_variant = i;
+            LOGI("consume: matched variant %d -> %s", i, consume_syms[i]);
             break;
         }
+        LOGI("consume: variant %d not found", i);
     }
 
-    if (symconsume) {
-        if (g_usenewconsume)
-            GlossHook(symconsume, (void*)hook_consume_new, (void**)&orig_consume_new);
-        else
-            GlossHook(symconsume, (void*)hook_consume,     (void**)&orig_consume);
+    if (!symconsume) {
+        LOGW("consume: no variant matched on this device — keys will not light up");
+    } else {
+        switch (g_consume_variant) {
+            case 0: GlossHook(symconsume, (void*)hook_consume_0, (void**)&orig_consume_0); break;
+            case 1: GlossHook(symconsume, (void*)hook_consume_1, (void**)&orig_consume_1); break;
+            case 2: GlossHook(symconsume, (void*)hook_consume_2, (void**)&orig_consume_2); break;
+            case 3: GlossHook(symconsume, (void*)hook_consume_3, (void**)&orig_consume_3); break;
+            case 4: GlossHook(symconsume, (void*)hook_consume_4, (void**)&orig_consume_4); break;
+        }
     }
 
     return nullptr;
 }
 
-// ── Entry point ──────────────────────────────────────────────────────────────
 __attribute__((constructor))
 void keystrokes_init() {
     pthread_t t;
