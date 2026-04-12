@@ -210,10 +210,13 @@ static void restoregl(const glstate& s) {
     s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
 }
 
+// ── Key drawing: darker slate style matching reference screenshot ────────────
 static void drawkey(const char* label, bool pressed, ImVec2 size) {
     float a = g_opacity;
-    ImVec4 color     = pressed ? ImVec4(1.0f, 1.0f, 1.0f, 0.95f*a) : ImVec4(0.15f, 0.15f, 0.15f, 0.7f*a);
-    ImVec4 textcolor = pressed ? ImVec4(0.0f, 0.0f, 0.0f, a)       : ImVec4(1.0f,  1.0f,  1.0f,  a);
+    ImVec4 color     = pressed ? ImVec4(0.85f, 0.85f, 0.85f, 0.95f*a)
+                               : ImVec4(0.18f, 0.20f, 0.22f, 0.88f*a);
+    ImVec4 textcolor = pressed ? ImVec4(0.05f, 0.05f, 0.05f, a)
+                               : ImVec4(0.90f, 0.90f, 0.90f, a);
     ImGui::PushStyleColor(ImGuiCol_Button,        color);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  color);
@@ -222,12 +225,13 @@ static void drawkey(const char* label, bool pressed, ImVec2 size) {
     ImGui::PopStyleColor(4);
 }
 
+// ── CPS key drawing ──────────────────────────────────────────────────────────
 static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps) {
     float a = g_opacity;
-    ImVec4 color     = pressed ? ImVec4(1.0f,  1.0f,  1.0f,  0.95f*a)
-                               : ImVec4(0.15f, 0.15f, 0.15f, 0.7f*a);
-    ImVec4 textcolor = pressed ? ImVec4(0.0f, 0.0f, 0.0f, a)
-                               : ImVec4(1.0f, 1.0f, 1.0f, a);
+    ImVec4 color     = pressed ? ImVec4(0.85f, 0.85f, 0.85f, 0.95f*a)
+                               : ImVec4(0.18f, 0.20f, 0.22f, 0.88f*a);
+    ImVec4 textcolor = pressed ? ImVec4(0.05f, 0.05f, 0.05f, a)
+                               : ImVec4(0.90f, 0.90f, 0.90f, a);
 
     ImGui::PushStyleColor(ImGuiCol_Button,        color);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
@@ -263,14 +267,15 @@ static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps) {
     ImGui::PopStyleColor(3);
 }
 
+// ── Expanded settings panel with ZhyKun credit ──────────────────────────────
 static void drawsettings(ImVec2 hudpos) {
-    float sw = g_width  * 0.22f;
-    float sh = g_height * 0.46f;
-    sw = std::max(sw, 200.0f);
-    sh = std::max(sh, 220.0f);
+    float sw = g_width  * 0.26f;
+    float sh = g_height * 0.62f;
+    sw = std::max(sw, 220.0f);
+    sh = std::max(sh, 340.0f);
 
     float ks      = g_keysize;
-    float spacing = ks * 0.12f;
+    float spacing = ks * 0.04f;
     float hudW    = ks * 3 + spacing * 2;
 
     float px = hudpos.x + hudW + 8.0f;
@@ -283,15 +288,16 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(sw, sh), ImGuiCond_Always);
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,         ImVec4(0.10f, 0.10f, 0.10f, 0.96f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,          ImVec4(0.20f, 0.20f, 0.20f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,   ImVec4(0.28f, 0.28f, 0.28f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,         ImVec4(0.10f, 0.11f, 0.12f, 0.97f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,          ImVec4(0.18f, 0.20f, 0.22f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,   ImVec4(0.25f, 0.27f, 0.30f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_SliderGrab,       ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.35f, 1.00f, 0.60f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_CheckMark,        ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(10.0f, 10.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(6.0f, 10.0f));
+    ImGui::PushStyleColor(ImGuiCol_Separator,        ImVec4(0.28f, 0.30f, 0.32f, 1.00f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(12.0f, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(6.0f, 11.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,   ImVec2(6.0f, 4.0f));
 
     ImGui::Begin("##cfg", nullptr,
@@ -300,22 +306,27 @@ static void drawsettings(ImVec2 hudpos) {
         ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoMove);
 
-    float labelw = sw * 0.52f;
-    float ctrlw  = sw - labelw - 20.0f;
+    float ctrlw = sw - 24.0f;
 
-    ImGui::TextColored(ImVec4(0.55f, 0.55f, 0.55f, 1.0f), "KEYSTROKES v" VERSION);
+    // ── Header ──────────────────────────────────────────────────────────────
+    ImGui::TextColored(ImVec4(0.90f, 0.90f, 0.90f, 1.0f), "KEYSTROKES  v" VERSION);
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::Text("Size: %.0fdp", g_keysize);
-    ImGui::SetNextItemWidth(-1);
+    // ── Key Size ────────────────────────────────────────────────────────────
+    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "KEY SIZE");
+    ImGui::Text("%.0f dp", g_keysize);
+    ImGui::SetNextItemWidth(ctrlw);
     if (ImGui::SliderFloat("##sz", &g_keysize, 30.0f, 120.0f, "")) savecfg();
 
     ImGui::Spacing();
 
+    // ── Opacity ─────────────────────────────────────────────────────────────
+    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "OPACITY");
     float op = g_opacity * 100.0f;
-    ImGui::Text("Opacity: %.0f%%", op);
-    ImGui::SetNextItemWidth(-1);
+    ImGui::Text("%.0f%%", op);
+    ImGui::SetNextItemWidth(ctrlw);
     if (ImGui::SliderFloat("##op", &op, 10.0f, 100.0f, "")) {
         g_opacity = op / 100.0f;
         savecfg();
@@ -323,29 +334,53 @@ static void drawsettings(ImVec2 hudpos) {
 
     ImGui::Spacing();
 
-    ImGui::Text("Corners: %.0fdp", g_rounding);
-    ImGui::SetNextItemWidth(-1);
+    // ── Corner Radius ───────────────────────────────────────────────────────
+    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "CORNER RADIUS");
+    ImGui::Text("%.0f dp", g_rounding);
+    ImGui::SetNextItemWidth(ctrlw);
     if (ImGui::SliderFloat("##rnd", &g_rounding, 0.0f, 50.0f, "")) savecfg();
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::Columns(2, "##lkcol", false);
-    ImGui::SetColumnWidth(0, labelw);
-    ImGui::Text("Lock Position");
-    ImGui::NextColumn();
-    ImGui::SetNextItemWidth(ctrlw);
-    if (ImGui::Checkbox("##lk", &g_locked)) savecfg();
-    ImGui::Columns(1);
+    // ── Lock Position ───────────────────────────────────────────────────────
+    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "LOCK POSITION");
+    bool locked = g_locked;
+    if (ImGui::Checkbox("##lk", &locked)) { g_locked = locked; savecfg(); }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Prevent drag & accidental move");
 
     ImGui::Spacing();
-    ImGui::TextDisabled("Prevent dragging and");
-    ImGui::TextDisabled("accidental activation");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ── Reset to Default ────────────────────────────────────────────────────
+    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "RESET");
+    ImGui::Spacing();
+    if (ImGui::Button("Reset to Default", ImVec2(ctrlw, 0))) {
+        g_keysize  = 50.0f;
+        g_opacity  = 1.0f;
+        g_rounding = 8.0f;
+        g_locked   = false;
+        g_hudpos   = ImVec2(100, 100);
+        savecfg();
+    }
+
+    // ── Credit pinned to bottom ──────────────────────────────────────────────
+    float remaining = ImGui::GetContentRegionAvail().y
+                    - ImGui::GetTextLineHeightWithSpacing() * 2.5f;
+    if (remaining > 0) ImGui::Dummy(ImVec2(0, remaining));
+
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.45f, 0.47f, 0.50f, 1.0f), "Made by");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "ZhyKun");
 
     ImGui::End();
     ImGui::PopStyleVar(4);
-    ImGui::PopStyleColor(6);
+    ImGui::PopStyleColor(7);
 
     ImGuiIO& io = ImGui::GetIO();
     bool outsideclick = ImGui::IsMouseClicked(0) &&
@@ -354,6 +389,7 @@ static void drawsettings(ImVec2 hudpos) {
     if (outsideclick) g_showsettings = false;
 }
 
+// ── Main HUD layout ──────────────────────────────────────────────────────────
 static void drawmenu() {
     KeyState k;
     { std::lock_guard<std::mutex> lock(g_keymutex); k = g_keys; }
@@ -362,11 +398,11 @@ static void drawmenu() {
     int rmbcps = g_rmbcps.get();
 
     float ks      = g_keysize;
-    float spacing = ks * 0.12f;
+    float spacing = ks * 0.04f;
     float hudW    = ks * 3 + spacing * 2;
-    float hudH    = ks * 3 + spacing * 2
-                  + ks * 0.7f + spacing
-                  + ks * 1.5f + spacing;
+    float hudH    = ks * 3        + spacing * 2   // W + ASD rows
+                  + ks * 1.5f    + spacing        // LMB/RMB row
+                  + ks * 0.7f    + spacing;        // SPACE row
 
     ImGuiIO& io = ImGui::GetIO();
     bool isInside = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hudW &&
@@ -396,32 +432,37 @@ static void drawmenu() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::SetNextWindowPos(g_hudpos, ImGuiCond_Always);
     ImGui::Begin("##ks", nullptr,
-        ImGuiWindowFlags_NoTitleBar      |
-        ImGuiWindowFlags_NoBackground    |
-        ImGuiWindowFlags_AlwaysAutoResize|
-        ImGuiWindowFlags_NoMove          |
+        ImGuiWindowFlags_NoTitleBar       |
+        ImGuiWindowFlags_NoBackground     |
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoMove           |
         ImGuiWindowFlags_NoInputs);
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(spacing, spacing));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, g_rounding);
 
+    // Row 1: W (centered)
     ImGui::SetCursorPosX(ks + spacing);
     drawkey("W", k.w, ImVec2(ks, ks));
 
+    // Row 2: A S D
     drawkey("A", k.a, ImVec2(ks, ks)); ImGui::SameLine();
     drawkey("S", k.s, ImVec2(ks, ks)); ImGui::SameLine();
     drawkey("D", k.d, ImVec2(ks, ks));
 
-    drawkey("SPACE", k.space, ImVec2(hudW, ks * 0.7f));
-
+    // Row 3: LMB | RMB with CPS
     float half = (hudW - spacing) / 2.0f;
     drawkeycps("LMB", k.lmb, ImVec2(half, ks * 1.5f), lmbcps); ImGui::SameLine();
     drawkeycps("RMB", k.rmb, ImVec2(half, ks * 1.5f), rmbcps);
+
+    // Row 4: SPACE (full width, at bottom)
+    drawkey("SPACE", k.space, ImVec2(hudW, ks * 0.7f));
 
     ImGui::PopStyleVar(3);
     ImGui::End();
 }
 
+// ── ImGui setup ─────────────────────────────────────────────────────────────
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     loadcfg();
@@ -451,7 +492,7 @@ static void setup() {
     style.WindowBorderSize = 0.0f;
 
     float ks      = g_keysize;
-    float spacing = ks * 0.12f;
+    float spacing = ks * 0.04f;
     float hudW    = ks * 3 + spacing * 2;
     float hudH    = ks * 4 + spacing * 3;
     g_hudpos.x = std::max(0.0f, std::min(g_hudpos.x, (float)g_width  - hudW));
@@ -460,6 +501,7 @@ static void setup() {
     g_initialized = true;
 }
 
+// ── Render ───────────────────────────────────────────────────────────────────
 static void render() {
     if (!g_initialized) return;
     glstate s; savegl(s);
@@ -474,6 +516,7 @@ static void render() {
     restoregl(s);
 }
 
+// ── EGL swap hook ────────────────────────────────────────────────────────────
 static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     EGLContext ctx = eglGetCurrentContext();
     if (ctx == EGL_NO_CONTEXT) return orig_eglswapbuffers(dpy, surf);
@@ -486,6 +529,7 @@ static EGLBoolean hook_eglswapbuffers(EGLDisplay dpy, EGLSurface surf) {
     return orig_eglswapbuffers(dpy, surf);
 }
 
+// ── Hook init thread ─────────────────────────────────────────────────────────
 static void* mainthread(void*) {
     sleep(5);
 
@@ -519,6 +563,7 @@ static void* mainthread(void*) {
     return nullptr;
 }
 
+// ── Entry point ──────────────────────────────────────────────────────────────
 __attribute__((constructor))
 void keystrokes_init() {
     pthread_t t;
