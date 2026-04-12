@@ -210,7 +210,7 @@ static void restoregl(const glstate& s) {
     s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
 }
 
-// ── Key drawing: darker slate style matching reference screenshot ────────────
+// ── Key drawing: dark slate style ────────────────────────────────────────────
 static void drawkey(const char* label, bool pressed, ImVec2 size) {
     float a = g_opacity;
     ImVec4 color     = pressed ? ImVec4(0.85f, 0.85f, 0.85f, 0.95f*a)
@@ -267,7 +267,7 @@ static void drawkeycps(const char* label, bool pressed, ImVec2 size, int cps) {
     ImGui::PopStyleColor(3);
 }
 
-// ── Expanded settings panel with ZhyKun credit ──────────────────────────────
+// ── Settings panel: white/blue theme, scrollable, ZhyKun credit ─────────────
 static void drawsettings(ImVec2 hudpos) {
     float sw = g_width  * 0.26f;
     float sh = g_height * 0.62f;
@@ -288,44 +288,50 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::SetNextWindowPos(ImVec2(px, py), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(sw, sh), ImGuiCond_Always);
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,         ImVec4(0.10f, 0.11f, 0.12f, 0.97f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,          ImVec4(0.18f, 0.20f, 0.22f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,   ImVec4(0.25f, 0.27f, 0.30f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrab,       ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.35f, 1.00f, 0.60f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_CheckMark,        ImVec4(0.30f, 0.80f, 0.50f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_Separator,        ImVec4(0.28f, 0.30f, 0.32f, 1.00f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(12.0f, 12.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,    ImVec2(6.0f, 11.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,   ImVec2(6.0f, 4.0f));
+    // White/blue color theme
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,          ImVec4(0.10f, 0.12f, 0.16f, 0.97f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,           ImVec4(0.16f, 0.20f, 0.28f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,    ImVec4(0.22f, 0.28f, 0.38f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab,        ImVec4(0.35f, 0.65f, 1.00f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive,  ImVec4(0.50f, 0.80f, 1.00f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark,         ImVec4(0.35f, 0.65f, 1.00f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Separator,         ImVec4(0.25f, 0.32f, 0.45f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg,       ImVec4(0.08f, 0.10f, 0.14f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,     ImVec4(0.30f, 0.50f, 0.80f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, ImVec4(0.40f, 0.60f, 0.90f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive,  ImVec4(0.50f, 0.75f, 1.00f, 1.00f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,  10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   ImVec2(12.0f, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,     ImVec2(6.0f, 11.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,    ImVec2(6.0f, 4.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,   6.0f);
 
+    // NoScrollbar removed so the panel is scrollable
     ImGui::Begin("##cfg", nullptr,
-        ImGuiWindowFlags_NoTitleBar  |
-        ImGuiWindowFlags_NoResize    |
-        ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoResize   |
         ImGuiWindowFlags_NoMove);
 
     float ctrlw = sw - 24.0f;
 
     // ── Header ──────────────────────────────────────────────────────────────
-    ImGui::TextColored(ImVec4(0.90f, 0.90f, 0.90f, 1.0f), "KEYSTROKES  v" VERSION);
+    ImGui::TextColored(ImVec4(0.85f, 0.92f, 1.00f, 1.0f), "KEYSTROKES  v" VERSION);
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
     // ── Key Size ────────────────────────────────────────────────────────────
-    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "KEY SIZE");
-    ImGui::Text("%.0f dp", g_keysize);
+    ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "KEY SIZE");
+    ImGui::TextColored(ImVec4(0.90f, 0.93f, 1.00f, 1.0f), "%.0f dp", g_keysize);
     ImGui::SetNextItemWidth(ctrlw);
     if (ImGui::SliderFloat("##sz", &g_keysize, 30.0f, 120.0f, "")) savecfg();
 
     ImGui::Spacing();
 
     // ── Opacity ─────────────────────────────────────────────────────────────
-    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "OPACITY");
+    ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "OPACITY");
     float op = g_opacity * 100.0f;
-    ImGui::Text("%.0f%%", op);
+    ImGui::TextColored(ImVec4(0.90f, 0.93f, 1.00f, 1.0f), "%.0f%%", op);
     ImGui::SetNextItemWidth(ctrlw);
     if (ImGui::SliderFloat("##op", &op, 10.0f, 100.0f, "")) {
         g_opacity = op / 100.0f;
@@ -335,8 +341,8 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::Spacing();
 
     // ── Corner Radius ───────────────────────────────────────────────────────
-    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "CORNER RADIUS");
-    ImGui::Text("%.0f dp", g_rounding);
+    ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "CORNER RADIUS");
+    ImGui::TextColored(ImVec4(0.90f, 0.93f, 1.00f, 1.0f), "%.0f dp", g_rounding);
     ImGui::SetNextItemWidth(ctrlw);
     if (ImGui::SliderFloat("##rnd", &g_rounding, 0.0f, 50.0f, "")) savecfg();
 
@@ -345,19 +351,24 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::Spacing();
 
     // ── Lock Position ───────────────────────────────────────────────────────
-    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "LOCK POSITION");
+    ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "LOCK POSITION");
     bool locked = g_locked;
     if (ImGui::Checkbox("##lk", &locked)) { g_locked = locked; savecfg(); }
     ImGui::SameLine();
-    ImGui::TextDisabled("Prevent drag & accidental move");
+    ImGui::TextColored(ImVec4(0.55f, 0.62f, 0.75f, 1.0f), "Prevent drag & accidental move");
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
     // ── Reset to Default ────────────────────────────────────────────────────
-    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "RESET");
+    ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "RESET");
     ImGui::Spacing();
+
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.30f, 0.55f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.42f, 0.72f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.35f, 0.55f, 0.90f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(0.88f, 0.93f, 1.00f, 1.00f));
     if (ImGui::Button("Reset to Default", ImVec2(ctrlw, 0))) {
         g_keysize  = 50.0f;
         g_opacity  = 1.0f;
@@ -366,6 +377,7 @@ static void drawsettings(ImVec2 hudpos) {
         g_hudpos   = ImVec2(100, 100);
         savecfg();
     }
+    ImGui::PopStyleColor(4);
 
     // ── Credit pinned to bottom ──────────────────────────────────────────────
     float remaining = ImGui::GetContentRegionAvail().y
@@ -374,13 +386,13 @@ static void drawsettings(ImVec2 hudpos) {
 
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::TextColored(ImVec4(0.45f, 0.47f, 0.50f, 1.0f), "Made by");
+    ImGui::TextColored(ImVec4(0.40f, 0.50f, 0.65f, 1.0f), "Made by");
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.30f, 0.80f, 0.50f, 1.0f), "ZhyKun");
+    ImGui::TextColored(ImVec4(0.50f, 0.75f, 1.00f, 1.0f), "ZhyKun");
 
     ImGui::End();
-    ImGui::PopStyleVar(4);
-    ImGui::PopStyleColor(7);
+    ImGui::PopStyleVar(5);
+    ImGui::PopStyleColor(11);
 
     ImGuiIO& io = ImGui::GetIO();
     bool outsideclick = ImGui::IsMouseClicked(0) &&
@@ -400,9 +412,9 @@ static void drawmenu() {
     float ks      = g_keysize;
     float spacing = ks * 0.04f;
     float hudW    = ks * 3 + spacing * 2;
-    float hudH    = ks * 3        + spacing * 2   // W + ASD rows
-                  + ks * 1.5f    + spacing        // LMB/RMB row
-                  + ks * 0.7f    + spacing;        // SPACE row
+    float hudH    = ks * 3     + spacing * 2   // W + ASD rows
+                  + ks * 1.5f + spacing        // LMB/RMB row
+                  + ks * 0.7f + spacing;       // dash/space row
 
     ImGuiIO& io = ImGui::GetIO();
     bool isInside = (io.MousePos.x >= g_hudpos.x && io.MousePos.x <= g_hudpos.x + hudW &&
@@ -455,14 +467,14 @@ static void drawmenu() {
     drawkeycps("LMB", k.lmb, ImVec2(half, ks * 1.5f), lmbcps); ImGui::SameLine();
     drawkeycps("RMB", k.rmb, ImVec2(half, ks * 1.5f), rmbcps);
 
-    // Row 4: SPACE (full width, at bottom)
-    drawkey("SPACE", k.space, ImVec2(hudW, ks * 0.7f));
+    // Row 4: Space bar shown as dash line
+    drawkey("- - - - -", k.space, ImVec2(hudW, ks * 0.7f));
 
     ImGui::PopStyleVar(3);
     ImGui::End();
 }
 
-// ── ImGui setup ─────────────────────────────────────────────────────────────
+// ── ImGui setup ──────────────────────────────────────────────────────────────
 static void setup() {
     if (g_initialized || g_width <= 0 || g_height <= 0) return;
     loadcfg();
