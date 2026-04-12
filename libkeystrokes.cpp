@@ -179,7 +179,8 @@ static void processinput(AInputEvent* event) {
                 float dy     = ty - g_lasttouchy;
                 g_lasttouchy = ty;
                 io.MousePos  = ImVec2(tx, ty);
-                // Inject vertical finger drag as scroll delta
+                // Natural scroll: drag finger down (dy > 0) → scroll content down
+                // ImGui MouseWheel positive = scroll up, so negate dy
                 io.MouseWheel += dy * -0.06f;
             } else if (action == AMOTION_EVENT_ACTION_UP ||
                        action == AMOTION_EVENT_ACTION_CANCEL) {
@@ -498,8 +499,8 @@ static void drawmenu() {
     drawkeycps("LMB", k.lmb, ImVec2(half, ks * 1.5f), lmbcps); ImGui::SameLine();
     drawkeycps("RMB", k.rmb, ImVec2(half, ks * 1.5f), rmbcps);
 
-    // Row 4: Space bar — thick horizontal line (UTF-8 box drawing: ━━━━━)
-    drawkey("\xe2\x94\x81\xe2\x94\x81\xe2\x94\x81\xe2\x94\x81\xe2\x94\x81", k.space, ImVec2(hudW, ks * 0.7f));
+    // Row 4: Space bar
+    drawkey("_____", k.space, ImVec2(hudW, ks * 0.7f));
 
     ImGui::PopStyleVar(3);
     ImGui::End();
