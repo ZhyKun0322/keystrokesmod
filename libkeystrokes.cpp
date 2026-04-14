@@ -9,6 +9,7 @@
 #include <mutex>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <algorithm>
 
 #include "pl/Hook.h"
@@ -21,7 +22,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 
-#define VERSION "1.2.1"
+#define VERSION "1.2.2"
 
 struct KeyState {
     bool w = false, a = false, s = false, d = false;
@@ -67,6 +68,7 @@ static const char* consume_syms[] = {
 };
 
 static int g_consume_variant = -1;
+static bool g_moverelative_hooked = false;
 
 typedef int32_t (*consume_fn_0)(void*, void*, bool, long,      uint32_t*, AInputEvent**, bool);
 typedef int32_t (*consume_fn_1)(void*, void*, bool, long,      uint32_t*, AInputEvent**);
@@ -82,26 +84,46 @@ static consume_fn_4 orig_consume_4 = nullptr;
 
 static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
 
-// ── moveRelative hook ─────────────────────────────────────────────────────────
 typedef void (*moveRelative_fn)(void*, float, float, float, float);
 static moveRelative_fn orig_moveRelative = nullptr;
 
-static uintptr_t getmcbase() {
-    FILE* maps = fopen("/proc/self/maps", "r");
-    if (!maps) return 0;
-    char line[512];
-    uintptr_t base = 0;
-    while (fgets(line, sizeof(line), maps)) {
-        if (strstr(line, "libminecraftpe.so") && strstr(line, "r-xp")) {
-            sscanf(line, "%lx-", &base);
-            break;
-        }
+// ── pattern scan ─────────────────────────────────────────────────────────────
+static void* pattern_scan(uintptr_t base, size_t size,
+                           const uint8_t* pattern, size_t patlen) {
+    if (!base || !size || !pattern || !patlen) return nullptr;
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(base);
+    for (size_t i = 0; i + patlen <= size; i++) {
+        if (memcmp(ptr + i, pattern, patlen) == 0)
+            return ptr + i;
     }
-    fclose(maps);
-    return base;
+    return nullptr;
 }
 
-static void hook_moveRelative(void* self, float strafe, float forward, float vertical, float speed) {
+// ── get libminecraftpe.so base and size ───────────────────────────────────────
+static void getmcbasesize(uintptr_t& base, size_t& size) {
+    base = 0; size = 0;
+    FILE* maps = fopen("/proc/self/maps", "r");
+    if (!maps) return;
+    char line[512];
+    uintptr_t first_start = 0, last_end = 0;
+    while (fgets(line, sizeof(line), maps)) {
+        if (!strstr(line, "libminecraftpe.so")) continue;
+        if (!strstr(line, "r-xp") && !strstr(line, "r--p")) continue;
+        uintptr_t start = 0, end = 0;
+        sscanf(line, "%lx-%lx", &start, &end);
+        if (!first_start) first_start = start;
+        if (end > last_end) last_end = end;
+    }
+    fclose(maps);
+    if (first_start && last_end > first_start) {
+        base = first_start;
+        size = last_end - first_start;
+    }
+}
+
+// ── moveRelative hook ─────────────────────────────────────────────────────────
+static void hook_moveRelative(void* self, float strafe, float forward,
+                               float vertical, float speed) {
     {
         std::lock_guard<std::mutex> lock(g_keymutex);
         g_keys.w = forward >  0.01f;
@@ -109,7 +131,6 @@ static void hook_moveRelative(void* self, float strafe, float forward, float ver
         g_keys.a = strafe  < -0.01f;
         g_keys.d = strafe  >  0.01f;
     }
-    LOGI("moveRelative: strafe=%.2f forward=%.2f", strafe, forward);
     if (orig_moveRelative) orig_moveRelative(self, strafe, forward, vertical, speed);
 }
 
@@ -252,25 +273,21 @@ static int32_t hook_consume_0(void* thiz, void* a1, bool a2, long a3, uint32_t* 
     if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
     return result;
 }
-
 static int32_t hook_consume_1(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent) {
     int32_t result = orig_consume_1 ? orig_consume_1(thiz, a1, a2, a3, a4, outEvent) : 0;
     if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
     return result;
 }
-
 static int32_t hook_consume_2(void* thiz, void* a1, bool a2, long long a3, uint32_t* a4, AInputEvent** outEvent) {
     int32_t result = orig_consume_2 ? orig_consume_2(thiz, a1, a2, a3, a4, outEvent) : 0;
     if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
     return result;
 }
-
 static int32_t hook_consume_3(void* thiz, void* a1, bool a2, long long a3, AInputEvent** outEvent, uint32_t* a4) {
     int32_t result = orig_consume_3 ? orig_consume_3(thiz, a1, a2, a3, outEvent, a4) : 0;
     if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
     return result;
 }
-
 static int32_t hook_consume_4(void* thiz, void* a1, bool a2, long long a3, AInputEvent** outEvent, uint32_t* a4, bool a6) {
     int32_t result = orig_consume_4 ? orig_consume_4(thiz, a1, a2, a3, outEvent, a4, a6) : 0;
     if (result == 0 && outEvent && *outEvent) processinput(*outEvent);
@@ -409,10 +426,16 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::Separator();
     ImGui::Spacing();
 
+    // show both hook statuses
     if (g_consume_variant >= 0)
-        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "Hook: variant %d (OK)", g_consume_variant);
+        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "KB Hook: variant %d (OK)", g_consume_variant);
     else
-        ImGui::TextColored(ImVec4(1.00f, 0.35f, 0.35f, 1.0f), "Hook: NOT FOUND");
+        ImGui::TextColored(ImVec4(1.00f, 0.35f, 0.35f, 1.0f), "KB Hook: NOT FOUND");
+
+    if (g_moverelative_hooked)
+        ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "Touch Hook: OK");
+    else
+        ImGui::TextColored(ImVec4(1.00f, 0.35f, 0.35f, 1.0f), "Touch Hook: NOT FOUND");
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -638,7 +661,7 @@ static void* mainthread(void*) {
     }
     if (swap) GlossHook(swap, (void*)hook_eglswapbuffers, (void**)&orig_eglswapbuffers);
 
-    // Hook InputConsumer::consume
+    // Hook InputConsumer::consume (keyboard/mouse)
     GHandle hlib     = GlossOpen("libinput.so");
     void*   symconsume = nullptr;
 
@@ -653,7 +676,7 @@ static void* mainthread(void*) {
     }
 
     if (!symconsume) {
-        LOGW("consume: no variant matched on this device — keys will not light up");
+        LOGW("consume: no variant matched — keyboard/mouse keys will not light up");
     } else {
         switch (g_consume_variant) {
             case 0: GlossHook(symconsume, (void*)hook_consume_0, (void**)&orig_consume_0); break;
@@ -664,14 +687,33 @@ static void* mainthread(void*) {
         }
     }
 
-    // Hook moveRelative in libminecraftpe.so
-    uintptr_t mc_base = getmcbase();
-    if (mc_base) {
-        void* fn = (void*)(mc_base + 0xe640f48);
-        GlossHook(fn, (void*)hook_moveRelative, (void**)&orig_moveRelative);
-        LOGI("moveRelative hooked at %p (base=0x%lx)", fn, mc_base);
+    // Hook moveRelative via pattern scan (touch dpad support)
+    uintptr_t mc_base = 0;
+    size_t    mc_size = 0;
+    getmcbasesize(mc_base, mc_size);
+
+    if (mc_base && mc_size) {
+        // 32-byte pattern from libminecraftpe.so @ 0xe640f48
+        static const uint8_t sig[] = {
+            0xFD, 0x7B, 0xBA, 0xA9,
+            0xFC, 0x6F, 0x01, 0xA9,
+            0xFA, 0x67, 0x02, 0xA9,
+            0xF8, 0x5F, 0x03, 0xA9,
+            0xF6, 0x57, 0x04, 0xA9,
+            0xF4, 0x4F, 0x05, 0xA9,
+            0xFD, 0x03, 0x00, 0x91,
+            0xFF, 0x03, 0x3E, 0xD1
+        };
+        void* fn = pattern_scan(mc_base, mc_size, sig, sizeof(sig));
+        if (fn) {
+            GlossHook(fn, (void*)hook_moveRelative, (void**)&orig_moveRelative);
+            g_moverelative_hooked = true;
+            LOGI("moveRelative hooked by pattern at %p", fn);
+        } else {
+            LOGW("moveRelative pattern not found — touch dpad will not light up");
+        }
     } else {
-        LOGW("moveRelative: could not find libminecraftpe.so base");
+        LOGW("moveRelative: could not find libminecraftpe.so in memory");
     }
 
     return nullptr;
