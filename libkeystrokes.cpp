@@ -57,45 +57,17 @@ static const char* SAVE_PATHS[] = {
     nullptr
 };
 
-// ── InputConsumer::consume symbol variants across Android versions ─────────────
-//
-//  Variant 0 — Android 13+ (NDK r25+):
-//    consume(InputEventFactoryInterface*, bool, long, uint32_t*, InputEvent**, bool)
-//    Trailing bool = resampling flag added in Android 13
-//
-//  Variant 1 — Android 11–12 (NDK r23–r24):
-//    consume(InputEventFactoryInterface*, bool, long, uint32_t*, InputEvent**)
-//    No trailing bool
-//
-//  Variant 2 — Android 10 (NDK r21):
-//    consume(InputEventFactoryInterface*, bool, long long, uint32_t*, InputEvent**)
-//    nsecs_t resolves to long long on this ABI, changes mangling
-//
-//  Variant 3 — Android 9 (NDK r19):
-//    consume(InputEventFactoryInterface*, bool, long long, InputEvent**, uint32_t*)
-//    outEvent and outSeq args are swapped vs later versions
-//
-//  Variant 4 — Android 9 alternate (some vendor ROMs):
-//    consume(InputEventFactoryInterface*, bool, long long, InputEvent**, uint32_t*, bool)
-//    Same swap as variant 3 but with an extra trailing bool
-
 static const char* consume_syms[] = {
-    // Variant 0 — Android 13+, trailing bool (resampling)
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventEb",
-    // Variant 1 — Android 11-12, no trailing bool
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE",
-    // Variant 2 — Android 10, nsecs_t = long long
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEbxPjPPNS_10InputEventE",
-    // Variant 3 — Android 9, swapped outSeq/outEvent arg order
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEbxPPNS_10InputEventEPj",
-    // Variant 4 — Android 9 alternate vendor ROM
     "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEbxPPNS_10InputEventEPjb",
     nullptr
 };
 
 static int g_consume_variant = -1;
 
-// One function pointer type per variant — must match exactly or you'll get UB/crashes
 typedef int32_t (*consume_fn_0)(void*, void*, bool, long,      uint32_t*, AInputEvent**, bool);
 typedef int32_t (*consume_fn_1)(void*, void*, bool, long,      uint32_t*, AInputEvent**);
 typedef int32_t (*consume_fn_2)(void*, void*, bool, long long, uint32_t*, AInputEvent**);
@@ -109,6 +81,37 @@ static consume_fn_3 orig_consume_3 = nullptr;
 static consume_fn_4 orig_consume_4 = nullptr;
 
 static EGLBoolean (*orig_eglswapbuffers)(EGLDisplay, EGLSurface) = nullptr;
+
+// ── moveRelative hook ─────────────────────────────────────────────────────────
+typedef void (*moveRelative_fn)(void*, float, float, float, float);
+static moveRelative_fn orig_moveRelative = nullptr;
+
+static uintptr_t getmcbase() {
+    FILE* maps = fopen("/proc/self/maps", "r");
+    if (!maps) return 0;
+    char line[512];
+    uintptr_t base = 0;
+    while (fgets(line, sizeof(line), maps)) {
+        if (strstr(line, "libminecraftpe.so") && strstr(line, "r-xp")) {
+            sscanf(line, "%lx-", &base);
+            break;
+        }
+    }
+    fclose(maps);
+    return base;
+}
+
+static void hook_moveRelative(void* self, float strafe, float forward, float vertical, float speed) {
+    {
+        std::lock_guard<std::mutex> lock(g_keymutex);
+        g_keys.w = forward >  0.01f;
+        g_keys.s = forward < -0.01f;
+        g_keys.a = strafe  < -0.01f;
+        g_keys.d = strafe  >  0.01f;
+    }
+    LOGI("moveRelative: strafe=%.2f forward=%.2f", strafe, forward);
+    if (orig_moveRelative) orig_moveRelative(self, strafe, forward, vertical, speed);
+}
 
 static double nowsec() {
     using namespace std::chrono;
@@ -222,8 +225,6 @@ static void processinput(AInputEvent* event) {
                 float dy     = ty - g_lasttouchy;
                 g_lasttouchy = ty;
                 io.MousePos  = ImVec2(tx, ty);
-                // Natural scroll: drag finger down → content moves down
-                // ImGui MouseWheel positive = scroll up, so negate dy
                 io.MouseWheel += dy * -0.06f;
             } else if (action == AMOTION_EVENT_ACTION_UP ||
                        action == AMOTION_EVENT_ACTION_CANCEL) {
@@ -245,8 +246,6 @@ static void processinput(AInputEvent* event) {
         }
     }
 }
-
-// ── Per-variant hook trampolines — each calls the matching orig with correct signature
 
 static int32_t hook_consume_0(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** outEvent, bool a6) {
     int32_t result = orig_consume_0 ? orig_consume_0(thiz, a1, a2, a3, a4, outEvent, a6) : 0;
@@ -410,7 +409,6 @@ static void drawsettings(ImVec2 hudpos) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Debug: show which consume variant matched on this device
     if (g_consume_variant >= 0)
         ImGui::TextColored(ImVec4(0.40f, 0.80f, 0.40f, 1.0f), "Hook: variant %d (OK)", g_consume_variant);
     else
@@ -640,7 +638,7 @@ static void* mainthread(void*) {
     }
     if (swap) GlossHook(swap, (void*)hook_eglswapbuffers, (void**)&orig_eglswapbuffers);
 
-    // Hook InputConsumer::consume — try every known variant in order
+    // Hook InputConsumer::consume
     GHandle hlib     = GlossOpen("libinput.so");
     void*   symconsume = nullptr;
 
@@ -664,6 +662,16 @@ static void* mainthread(void*) {
             case 3: GlossHook(symconsume, (void*)hook_consume_3, (void**)&orig_consume_3); break;
             case 4: GlossHook(symconsume, (void*)hook_consume_4, (void**)&orig_consume_4); break;
         }
+    }
+
+    // Hook moveRelative in libminecraftpe.so
+    uintptr_t mc_base = getmcbase();
+    if (mc_base) {
+        void* fn = (void*)(mc_base + 0xe640f48);
+        GlossHook(fn, (void*)hook_moveRelative, (void**)&orig_moveRelative);
+        LOGI("moveRelative hooked at %p (base=0x%lx)", fn, mc_base);
+    } else {
+        LOGW("moveRelative: could not find libminecraftpe.so base");
     }
 
     return nullptr;
